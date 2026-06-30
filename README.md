@@ -1,4 +1,4 @@
-# 🚀 Autonomous SEO Writer & Publisher Agent
+# Autonomous SEO Writer & Publisher Agent
 
 [![GitHub stars](https://img.shields.io/github/stars/navigotechsolutions-labs/autonomous-seo-writer.svg?style=flat-ring)](https://github.com/navigotechsolutions-labs/autonomous-seo-writer/stargazers)
 [![GitHub license](https://img.shields.io/github/license/navigotechsolutions-labs/autonomous-seo-writer.svg?style=flat-ring)](LICENSE)
