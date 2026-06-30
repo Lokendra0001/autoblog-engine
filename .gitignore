@@ -1,0 +1,7 @@
+.env
+data/
+clients/*/assets/*.png
+!clients/navigo/assets/logo.png
+__pycache__/
+*.pyc
+*credentials*.json

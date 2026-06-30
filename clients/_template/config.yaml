@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SEO Content Agent — Client config template
+# Copy this folder to clients/<your-client-id>/ and fill it in.
+# Any value may use ${ENV_VAR} to pull a secret from the environment.
+# ─────────────────────────────────────────────────────────────────────────────
+
+enabled: false              # flip to true once validated to include in run-all
+posts_per_day: 1
+topic_mode: trending        # trending | breaking | evergreen_queue
+min_words: 1400
+
+# ── WordPress (where posts are published) ──
+wordpress:
+  site_url: "https://example.com"
+  username: "editor_user"
+  app_password: "${ACME_WP_APP_PASSWORD}"   # keep the secret in the environment
+
+# ── Brand identity (drives template, voice, image style) ──
+brand:
+  name: "Acme Co"
+  website: "https://example.com"
+  location: "City, Country"
+  voice: >
+    confident, clear and practical — no fluff, no em dashes, no jargon.
+    Simple plain English, like explaining to a smart friend who runs a business.
+  palette:
+    primary: "#1e90ff"
+    deep: "#003C8F"
+    accent: "#FF8C00"
+    bg: "#F9F9F9"
+    text: "#2C2C2C"
+    text_grey: "#555555"
+    light_bg: "#EDF5FF"
+  fonts:
+    heading: "Montserrat"
+    body: "Open Sans"
+  logo: "assets/logo.png"   # relative to this client folder
+
+# ── Audience & geo ──
+audience: "small business owners and entrepreneurs"
+geo: "IN"                   # Google Trends/News region code
+geo_label: "India"
+
+# ── Call to action injected before the FAQ ──
+cta:
+  type: "contact"           # whatsapp | contact
+  phone: ""                 # digits only (whatsapp), e.g. 919999999999
+  contact_url: "https://example.com/contact"
+  headline: "Want help putting this into action?"
+  subtext: "Book a free 30-minute strategy call with our team."
+  button_text: "Get a Free Consultation"
+
+# ── Post categories the writer may choose ONE from ──
+categories:
+  - "AI Tools"
+  - "Digital Marketing"
+  - "SEO"
+  - "Social Media"
+  - "Business Automation"
+  - "Content Marketing"
+
+# ── Internal linking ──
+sitemap_url: "https://example.com/post-sitemap.xml"   # recent posts auto-linked
+internal_links: |
+  Services:
+  - Main service: https://example.com/services
+  Contact: https://example.com/contact
+
+# ── Topic-discovery sources (override per niche; defaults are AI/marketing) ──
+sources:
+  news_query: "AI tools digital marketing 2026"
+  youtube_channels: []      # [["UCxxxx", "LABEL"], ...]
+  # company_feeds / blog_feeds / breaking_feeds use sensible defaults if omitted
+
+# ── Indexing (optional) ──
+indexnow_key: ""
+google_indexing_credentials: ""   # path to a Google service-account .json

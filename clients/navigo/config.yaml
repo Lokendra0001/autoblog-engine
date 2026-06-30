@@ -1,0 +1,90 @@
+# NaviGo Tech Solutions — tenant #1 (the original automation, productized)
+# Left disabled by default so it does NOT double-post against the live VPS cron.
+# Set enabled: true only when you intend this engine to take over posting.
+
+enabled: false
+posts_per_day: 1
+topic_mode: trending
+min_words: 1400
+
+wordpress:
+  site_url: "https://navigotechsolutions.com"
+  username: "${WP_USERNAME}"
+  app_password: "${WP_APP_PASSWORD}"
+
+brand:
+  name: "NaviGo Tech Solutions"
+  website: "https://navigotechsolutions.com"
+  location: "Chennai, India"
+  voice: >
+    confident, clear and practical — no fluff, no em dashes, no jargon.
+    Simple British-style English, like explaining to a smart friend who runs a business.
+  palette:
+    primary: "#1e90ff"
+    deep: "#003C8F"
+    accent: "#1e90ff"
+    bg: "#F9F9F9"
+    text: "#2C2C2C"
+    text_grey: "#555555"
+    light_bg: "#EDF5FF"
+  fonts:
+    heading: "Montserrat"
+    body: "Open Sans"
+  logo: "assets/logo.png"
+
+audience: "Indian small business owners, entrepreneurs and marketing managers"
+geo: "IN"
+geo_label: "India"
+
+cta:
+  type: "whatsapp"
+  phone: "916380853075"
+  contact_url: "https://navigotechsolutions.com/contact.html"
+  headline: "Not sure which tool fits your business?"
+  subtext: "Our team at NaviGo Tech Solutions will set it up for you — free 30-minute strategy call."
+  button_text: "WhatsApp Us Now — It's Free"
+
+categories:
+  - "AI Tools"
+  - "Digital Marketing"
+  - "SEO"
+  - "Social Media"
+  - "Business Automation"
+  - "Content Marketing"
+  - "Paid Advertising"
+  - "Web Development"
+  - "Growth Hacking"
+  - "Email Marketing"
+
+sitemap_url: "https://navigotechsolutions.com/blog/post-sitemap.xml"
+internal_links: |
+  NaviGo Tech Solutions internal links — insert 2 to 3 contextually with natural anchor text:
+
+  Services:
+  - AI Digital Marketing: https://navigotechsolutions.com/services.html#digital-marketing
+  - SEO Optimization: https://navigotechsolutions.com/services.html#seo
+  - Social Media Marketing: https://navigotechsolutions.com/services.html#social-media
+  - AI Ads & Automation: https://navigotechsolutions.com/services.html#ai
+  - AI Agents & Bots: https://navigotechsolutions.com/services.html#ai-agents
+  - Web Development: https://navigotechsolutions.com/services.html#web-development
+  - Content Creation: https://navigotechsolutions.com/services.html#content
+  - AI Strategy Consulting: https://navigotechsolutions.com/services.html#consulting
+
+  Blog Posts:
+  - Top 25 AI Tools in 2026: https://navigotechsolutions.com/blog/top-25-ai-tools-in-2026/
+  - Local SEO Guide Chennai: https://navigotechsolutions.com/blog/local-seo-guide-2026-how-to-rank-your-business-in-chennai-search-results/
+  - Social Media SEO 2026: https://navigotechsolutions.com/blog/social-media-seo-in-2026-why-google-is-no-longer-the-first-stop/
+
+  Contact: https://navigotechsolutions.com/contact.html
+
+sources:
+  news_query: "AI tools digital marketing India 2026"
+  youtube_channels:
+    - ["UChpleBmo18P08aKCIgti38g", "YT MATT WOLFE"]
+    - ["UCawZsQWqfGSbCI5yjkdVkTA", "YT MATTHEW BERMAN"]
+    - ["UCxjs1n-C7rjXQ9KhgDng-6A", "YT ISHAN SHARMA"]
+    - ["UCsQoiOrh7jzKmE8NBofhTnQ", "YT VARUN MAYYA"]
+    - ["UClXAalunTPaX1YV185DWUeg", "YT VAIBHAV SISINTY"]
+
+indexnow_key: "${INDEXNOW_KEY}"
+google_indexing_credentials: ""
