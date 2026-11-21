@@ -17,6 +17,8 @@ from datetime import date
 from urllib.parse import quote
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from . import keywords
 
@@ -55,6 +57,12 @@ def _abstract(inverted: dict | None) -> str:
     return re.sub(r"^(abstract[:.\s]*)", "", text, flags=re.I).strip()
 
 
+# OpenAlex is occasionally briefly overloaded (503): retry twice, waiting a few seconds.
+_openalex = requests.Session()
+_openalex.mount("https://", HTTPAdapter(max_retries=Retry(
+    total=2, backoff_factor=4, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=("GET",))))
+
+
 def papers(keyword: str, limit=4, years=6) -> list[dict]:
     """Recent research papers (title, year, journal, abstract excerpt) from OpenAlex.
     Long keywords can be too specific, so the search is widened until something matches."""
@@ -62,7 +70,7 @@ def papers(keyword: str, limit=4, years=6) -> list[dict]:
     since = f"{date.today().year - years}-01-01"
     while words:
         try:
-            r = requests.get("https://api.openalex.org/works", headers=_UA, timeout=_TIMEOUT, params={
+            r = _openalex.get("https://api.openalex.org/works", headers=_UA, timeout=_TIMEOUT, params={
                 "search": " ".join(words),
                 "filter": f"from_publication_date:{since},has_abstract:true,type:article",
                 "sort": "relevance_score:desc", "per_page": limit,
