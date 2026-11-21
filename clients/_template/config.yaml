@@ -1,77 +1,150 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# SEO Content Agent — Client config template
-# Copy this folder to clients/<your-client-id>/ and fill it in.
-# Any value may use ${ENV_VAR} to pull a secret from the environment.
+# Example client config: one business = one folder in clients/.
+#
+#   python cli.py add-client acme       copies this file to clients/acme/config.yaml
+#   python cli.py validate acme         checks keys, Strapi/WordPress access and this file
+#
+# Anything can read a secret from .env with ${VAR_NAME}. Never put keys in this file.
+# The more specific you are below, the better and more accurate the articles.
 # ─────────────────────────────────────────────────────────────────────────────
 
-enabled: false              # flip to true once validated to include in run-all
-posts_per_day: 1
-topic_mode: trending        # trending | breaking | evergreen_queue
-min_words: 1400
+enabled: false              # set true once `validate` passes; only enabled clients run on schedule
 
-# ── WordPress (where posts are published) ──
-wordpress:
-  site_url: "https://example.com"
-  username: "editor_user"
-  app_password: "${ACME_WP_APP_PASSWORD}"   # keep the secret in the environment
+# ── Schedule (POSTS_PER_MONTH / PUBLISH_DAYS in .env override these) ──
+posts_per_month: 8          # spread evenly over the publish days of each month
+publish_weekdays: [1, 4]    # 0=Mon 1=Tue 2=Wed 3=Thu 4=Fri 5=Sat 6=Sun
+timezone: "Asia/Kolkata"    # the business's local time: decides which day "today" is
+posts_per_day: 1            # for the manual `run` / `run-all` commands
+topic_mode: trending        # manual `run`: trending | breaking | evergreen_queue
 
-# ── Brand identity (drives template, voice, image style) ──
+# ── Where finished articles go ──
+# strapi    upload to your Strapi CMS (settings in `strapi:` below)
+# wordpress post to your WordPress site (settings in `wordpress:` below)
+# files     don't publish anywhere: save to data/<client>/drafts/ (.html preview, .json, cover .jpg)
+# Leave empty to use whichever CMS is configured. PUBLISH_TO in .env overrides this.
+publish_to: files
+
+# ── Article length ──
+min_words: 1100
+max_words: 1500             # 0 = no upper limit
+
+# ── The business ──
 brand:
-  name: "Acme Co"
-  website: "https://example.com"
-  location: "City, Country"
+  name: "Acme Solar"
+  website: "https://www.example.com"
+  location: "Pune, Maharashtra, India"
   voice: >
-    confident, clear and practical — no fluff, no em dashes, no jargon.
-    Simple plain English, like explaining to a smart friend who runs a business.
-  palette:
-    primary: "#1e90ff"
-    deep: "#003C8F"
-    accent: "#FF8C00"
-    bg: "#F9F9F9"
-    text: "#2C2C2C"
-    text_grey: "#555555"
-    light_bg: "#EDF5FF"
+    Clear, practical and trustworthy, like an experienced installer advising a homeowner.
+    Plain English, no hype, no jargon without explanation.
+  palette:                  # colours for the call-to-action box and the preview page
+    primary: "#0f766e"
+    deep: "#134e4a"
+    accent: "#f59e0b"
+    bg: "#ffffff"
+    text: "#111827"
+    text_grey: "#4b5563"
+    light_bg: "#f0fdfa"
   fonts:
-    heading: "Montserrat"
-    body: "Open Sans"
-  logo: "assets/logo.png"   # relative to this client folder
+    heading: "Inter"
+    body: "Inter"
 
-# ── Audience & geo ──
-audience: "small business owners and entrepreneurs"
-geo: "IN"                   # Google Trends/News region code
-geo_label: "India"
+audience: "homeowners, housing societies and small business owners"
+geo: "IN"                   # country code for Google News / Trends / search suggestions
+geo_label: "India"          # how the country is named in the articles
 
-# ── Call to action injected before the FAQ ──
-cta:
-  type: "contact"           # whatsapp | contact
-  phone: ""                 # digits only (whatsapp), e.g. 919999999999
-  contact_url: "https://example.com/contact"
-  headline: "Want help putting this into action?"
-  subtext: "Book a free 30-minute strategy call with our team."
-  button_text: "Get a Free Consultation"
+# What the writer may say about the business. Facts here are the ONLY source for claims about you,
+# so list products, services, specs, certifications, service areas and real strengths.
+context: |
+  Acme Solar designs and installs rooftop solar systems in Pune and nearby districts.
 
-# ── Post categories the writer may choose ONE from ──
-categories:
-  - "AI Tools"
-  - "Digital Marketing"
-  - "SEO"
-  - "Social Media"
-  - "Business Automation"
-  - "Content Marketing"
-
-# ── Internal linking ──
-sitemap_url: "https://example.com/post-sitemap.xml"   # recent posts auto-linked
-internal_links: |
   Services:
-  - Main service: https://example.com/services
-  Contact: https://example.com/contact
+  - Residential rooftop solar, 2 kW to 10 kW
+  - Commercial systems up to 500 kW
+  - Annual maintenance contracts and panel cleaning
 
-# ── Topic-discovery sources (override per niche; defaults are AI/marketing) ──
+  Facts:
+  - MNRE-empanelled vendor; helps customers apply for the PM Surya Ghar subsidy
+  - Uses Tier-1 mono-PERC panels with a 25-year performance warranty
+  - 1,200+ installations since 2016
+
+# Extra rules for this niche, added to the writer's instructions (optional).
+writing_notes: |
+  - Never quote system prices: say they depend on roof size, load and subsidy, and point to a site survey.
+  - Mention net metering rules only in general terms; they differ by electricity board.
+
+# ── Call to action (shown before the FAQs) ──
+cta:
+  type: "contact"           # contact | whatsapp
+  contact_url: "https://www.example.com/contact"
+  phone: ""                 # whatsapp only: digits with country code, e.g. 919999999999
+  headline: "Thinking about rooftop solar?"
+  subtext: "Book a free site survey and get a system design with subsidy estimate."
+  button_text: "Book a Free Survey"
+
+# ── Categories: the writer picks one per article. If your CMS has a fixed list, copy it exactly. ──
+categories:
+  - "Guides"
+  - "Comparison"
+  - "Costs and Savings"
+  - "Subsidies"
+  - "Maintenance"
+  - "News"
+
+# ── Internal links: the writer must link 2-3 of these in every article ──
+internal_links: |
+  - Residential solar: https://www.example.com/residential
+  - Commercial solar: https://www.example.com/commercial
+  - Solar savings calculator: https://www.example.com/calculator
+  - Projects: https://www.example.com/projects
+  - Contact / site survey: https://www.example.com/contact
+sitemap_url: ""             # optional: a post sitemap, to also link recent blog posts
+
+# ── Topic research ──
 sources:
-  news_query: "AI tools digital marketing 2026"
+  keyword_seeds:            # your core terms; expanded into real Google searches each month
+    - "rooftop solar"
+    - "solar panels for home"
+    - "solar subsidy"
+  keyword_exclude:          # kinds of searches never to write about
+    - "job vacancies"
+    - "solar stocks and share prices"
+  news_query: "rooftop solar India"
+  news_queries:             # extra Google News searches for timely angles
+    - "solar subsidy scheme India"
+    - "net metering Maharashtra"
+  google_trends: false      # general daily trends; usually off for niche businesses
+  company_feeds: []         # RSS feeds: [["https://site.com/feed", "LABEL"], ...]
+  blog_feeds: []
+  breaking_feeds: []
   youtube_channels: []      # [["UCxxxx", "LABEL"], ...]
-  # company_feeds / blog_feeds / breaking_feeds use sensible defaults if omitted
 
-# ── Indexing (optional) ──
+# ── Strapi settings (used when publish_to: strapi) ──
+strapi:
+  url: "https://cms.example.com"
+  token: "${STRAPI_API_TOKEN}"   # API token with find/create (+ update) on the collection and Upload
+  status: "draft"                # draft = review in the Strapi admin first; published = live at once
+  collection: "blogs"            # API name of your collection: /api/<collection>
+  blog_path: "/blogs"            # public post URL = brand.website + blog_path + "/" + slug
+  fields:                        # only needed if your field names differ; "" = don't send it
+    title: "title"               # required
+    slug: "slug"                 # required (uid field)
+    content: "content"           # article HTML (Rich text or long text rendered as HTML)
+    image: "image"               # cover image (media field)
+    category: "category"
+    date: "date"
+    readTime: "readTime"         # e.g. "7 min read"
+    imageSource: "imageSource"   # photo credit (Unsplash)
+    meta_description: ""         # e.g. "seoDescription"
+    focus_keyword: ""
+    tags: ""                     # sent as "tag one, tag two"
+
+# ── WordPress settings (used when publish_to: wordpress) ──
+wordpress:
+  site_url: ""                   # e.g. https://www.example.com
+  username: ""
+  app_password: "${WP_APP_PASSWORD}"   # Users → Profile → Application Passwords
+  status: "draft"                # draft = review in wp-admin first; publish = live at once
+
+# ── Faster indexing (optional) ──
 indexnow_key: ""
-google_indexing_credentials: ""   # path to a Google service-account .json
+google_indexing_credentials: ""  # path to a Google service-account .json

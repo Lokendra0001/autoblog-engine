@@ -1,4 +1,4 @@
-"""SEO Content Agent — multi-tenant engine.
+"""AutoBlog Engine — multi-tenant engine.
 
 A config-driven generalization of the NaviGo blog automation: the same proven
 discover -> research -> write -> image -> publish -> schema -> index pipeline,

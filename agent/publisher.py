@@ -1,4 +1,4 @@
-"""WordPress publishing: REST API post, categories/tags, media, JSON-LD schema.
+"""WordPress publishing (optional): REST API post, categories/tags, media, Article schema.
 
 All WP credentials come from the per-client config, so one engine publishes to
 any number of client WordPress sites.
@@ -6,9 +6,11 @@ any number of client WordPress sites.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 
@@ -67,19 +69,20 @@ def upload_image_bytes(client, image_bytes, seed, alt_text="", caption=""):
         return None, None
 
 
-def upload_image_url(client, image_url, seed, photographer="Pexels"):
+def upload_image_url(client, image_url, seed, credit):
     try:
-        img = requests.get(image_url, timeout=30)
+        img = requests.get(image_url, timeout=30, headers={"User-Agent": "Mozilla/5.0 (compatible; AutoBlogEngine/1.0)"})
         if img.status_code != 200:
             return None, None
         return upload_image_bytes(client, img.content, seed,
-                                  alt_text=seed, caption=f"Photo by {photographer} via Pexels")
+                                  alt_text=seed, caption=credit)
     except Exception as e:
         print(f"[WARN] Image url upload error: {e}")
         return None, None
 
 
-def publish_post(client, title, content, meta, focus_keyword, category, tags, featured_media_id=None):
+def publish_post(client, title, content, meta, focus_keyword, category, tags, featured_media_id=None,
+                 status="publish", slug=None):
     print(f"[OK] [{client.id}] Publishing to WordPress...")
     cat_id = get_or_create_term(client, "categories", category)
     tag_ids = []
@@ -90,7 +93,7 @@ def publish_post(client, title, content, meta, focus_keyword, category, tags, fe
         time.sleep(0.4)
 
     payload = {
-        "title": title, "content": content, "excerpt": meta, "status": "publish",
+        "title": title, "content": content, "excerpt": meta, "status": status,
         "categories": [cat_id] if cat_id else [], "tags": tag_ids,
         "featured_media": featured_media_id or 0,
         "meta": {
@@ -98,6 +101,8 @@ def publish_post(client, title, content, meta, focus_keyword, category, tags, fe
             "rank_math_focus_keyword": focus_keyword, "rank_math_description": meta,
         },
     }
+    if slug:
+        payload["slug"] = slug
     r = _wp(requests.post, f"{client.wordpress.site_url}/wp-json/wp/v2/posts",
             json=payload, auth=_auth(client), timeout=60)
     if r.status_code in (200, 201):
@@ -105,6 +110,25 @@ def publish_post(client, title, content, meta, focus_keyword, category, tags, fe
         print(f"[OK] Published! ID {data.get('id')} -> {data.get('link')}")
         return data.get("id"), data.get("link")
     raise Exception(f"WP publish failed {r.status_code}: {r.text[:300]}")
+
+
+def upload_article(client, data: dict, image_path: Path | None) -> dict:
+    """Post one exported article (see pipeline.build_export) to WordPress.
+    Returns the same shape as strapi.upload_article: {"result": "uploaded"|"failed", ...}."""
+    status = "publish" if client.wordpress.status == "publish" else "draft"
+    meta, keyword = data.get("meta_description", ""), data.get("focus_keyword", "")
+    try:
+        media_id = None
+        if image_path and image_path.is_file():
+            media_id, _ = upload_image_bytes(client, image_path.read_bytes(), data["slug"],
+                                             alt_text=keyword or data["title"], caption=data.get("imageSource", ""))
+        post_id, url = publish_post(client, data["title"], data["content"], meta, keyword, data["category"],
+                                    data.get("tags"), media_id, status=status, slug=data["slug"])
+        patch_content(client, post_id, build_schema(client, data["title"], meta, data["content"], url))
+    except Exception as e:
+        return {"result": "failed", "reason": str(e)[:300]}
+    return {"result": "uploaded", "documentId": str(post_id), "url": url, "image": bool(media_id),
+            "status": "published" if status == "publish" else "draft"}
 
 
 def patch_content(client, post_id, content):
@@ -117,31 +141,13 @@ def patch_content(client, post_id, content):
 
 
 def build_schema(client, title, meta, content, post_url):
-    """Prepend Article + FAQPage + HowTo JSON-LD parsed from the HTML."""
-    import json
+    """Prepend Article JSON-LD. (FAQPage JSON-LD is already part of the generated content.)"""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    logo_url = f"{client.brand.website.rstrip('/')}/assets/logo.png"
-    schemas = [{
+    org = {"@type": "Organization", "name": client.brand.name, "url": client.brand.website}
+    schema = {
         "@context": "https://schema.org", "@type": "Article",
-        "headline": title, "description": meta,
-        "author": {"@type": "Organization", "name": client.brand.name, "url": client.brand.website},
-        "publisher": {"@type": "Organization", "name": client.brand.name,
-                      "logo": {"@type": "ImageObject", "url": logo_url}},
+        "headline": title, "description": meta, "author": org, "publisher": org,
         "datePublished": now, "dateModified": now,
         "mainEntityOfPage": {"@type": "WebPage", "@id": post_url},
-    }]
-
-    questions = re.findall(r'<summary[^>]*class="navigo-faq-summary"[^>]*>(.*?)</summary>', content, re.DOTALL)
-    answers = re.findall(r'<div[^>]*class="navigo-faq-answer"[^>]*>(.*?)</div>', content, re.DOTALL)
-    faq = []
-    for q, a in zip(questions, answers):
-        qt, at = re.sub(r"<[^>]+>", "", q).strip(), re.sub(r"<[^>]+>", "", a).strip()
-        if qt and at:
-            faq.append({"@type": "Question", "name": qt,
-                        "acceptedAnswer": {"@type": "Answer", "text": at}})
-    if faq:
-        schemas.append({"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": faq})
-
-    schema_html = "\n".join(
-        f'<script type="application/ld+json">{json.dumps(s, ensure_ascii=False)}</script>' for s in schemas)
-    return schema_html + "\n" + content
+    }
+    return f'<script type="application/ld+json">{json.dumps(schema, ensure_ascii=False)}</script>\n{content}'

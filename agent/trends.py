@@ -1,4 +1,4 @@
-"""Topic discovery: Google Trends, Google News, AI-company RSS, YouTube creators.
+"""Topic discovery: Google News, Google Trends, RSS feeds and YouTube, per client config.
 
 Generalized from the NaviGo pipeline — feeds, geo and news query now come from
 the client config so each tenant trends in its own niche.
@@ -14,10 +14,11 @@ from urllib.parse import quote
 
 import requests
 
+from . import strapi
 from .ai import call_ai
 from .state import ClientState
 
-_UA = {"User-Agent": "Mozilla/5.0 (compatible; SEOContentAgent/1.0)"}
+_UA = {"User-Agent": "Mozilla/5.0 (compatible; AutoBlogEngine/1.0)"}
 
 
 def fetch_rss_titles(url, label, limit=8, with_age=False):
@@ -63,12 +64,10 @@ def fetch_rss_titles(url, label, limit=8, with_age=False):
         return []
 
 
-def discover_topic(client, state: ClientState):
-    """Pick the single best trending topic for this client's niche/audience."""
-    print(f"[SEARCH] [{client.id}] Discovering today's topic...")
+def gather_headlines(client, per_query=8):
+    """Collect today's niche headlines from the client's configured sources (deduplicated)."""
     headlines = []
     src = client.sources
-
     for feed_url, label in src.company_feeds:
         headlines += fetch_rss_titles(feed_url, label=label, limit=3)
     for feed_url, label in src.blog_feeds:
@@ -78,46 +77,54 @@ def discover_topic(client, state: ClientState):
             f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}", label=label, limit=2)
 
     geo = client.geo
-    google_url = (f"https://news.google.com/rss/search?q={quote(src.news_query)}"
-                  f"&hl=en-{geo}&gl={geo}&ceid={geo}:en")
-    headlines += fetch_rss_titles(google_url, label="GOOGLE NEWS", limit=5)
-    headlines += fetch_rss_titles(
-        f"https://trends.google.com/trends/trendingsearches/daily/rss?geo={geo}",
-        label="TRENDING", limit=5)
+    for query in [src.news_query, *src.news_queries]:
+        if query:
+            url = (f"https://news.google.com/rss/search?q={quote(query)}+when:30d"
+                   f"&hl=en-{geo}&gl={geo}&ceid={geo}:en")
+            headlines += fetch_rss_titles(url, label="NEWS", limit=per_query)
+    if src.google_trends:
+        headlines += fetch_rss_titles(
+            f"https://trends.google.com/trends/trendingsearches/daily/rss?geo={geo}",
+            label="TRENDING", limit=5)
+    return list(dict.fromkeys(headlines))
 
-    if not headlines:
+
+def used_topic_list(state: ClientState, limit=40):
+    used = [l.split(" | ", 1)[-1] if " | " in l else l for l in state.load_used_topics()]
+    return used[-limit:]
+
+
+def discover_topic(client, state: ClientState):
+    """Pick the single best topic for this client's niche from today's headlines."""
+    print(f"[SEARCH] [{client.id}] Discovering today's topic...")
+    unique = gather_headlines(client)
+    if not unique:
         print("[WARN] No headlines gathered.")
         return None
+    used = [b["title"] for b in (strapi.list_blogs(client) or [])] + used_topic_list(state)
 
-    seen, unique = set(), []
-    for h in headlines:
-        if h not in seen:
-            seen.add(h)
-            unique.append(h)
+    prompt = f"""You are the content strategist for {client.brand.name}, writing for {client.audience} in {client.geo_label}.
 
-    used = state.load_used_topics()
-    used_clean = [l.split(" | ", 1)[-1] if " | " in l else l for l in used]
-    used_text = "\n".join(used_clean[-30:]) if used_clean else "None yet."
+ABOUT THE COMPANY:
+{client.context or client.brand.name}
 
-    prompt = f"""You are an SEO content strategist for {client.brand.name}, serving {client.audience} in {client.geo_label}.
+ARTICLE CATEGORIES: {", ".join(client.categories)}
 
-TODAY'S HEADLINES (AI blogs, top marketing blogs, Google News, Google Trends {client.geo_label}):
-{chr(10).join(unique[:25])}
+RECENT HEADLINES IN THIS INDUSTRY:
+{chr(10).join(unique[:30])}
 
-TOPICS ALREADY WRITTEN — DO NOT repeat or closely imitate any of these:
-{used_text}
+TOPICS ALREADY WRITTEN (do not repeat or closely imitate):
+{chr(10).join(used) if used else "None yet."}
 
-Pick the SINGLE best blog topic from today's headlines for this audience.
-Priority: (1) breaking AI/industry news, (2) a newly launched tool useful to them,
-(3) a trending SEO/marketing/strategy angle, (4) a highly shareable, curiosity-driven idea.
-Always reframe for {client.audience} in {client.geo_label}.
+Pick the SINGLE best article topic: one these readers actively search for, that fits a category
+above, and that lets {client.brand.name} show genuine expertise. Use the headlines for timeliness
+where they are relevant; otherwise choose an evergreen, high-search-intent topic.
 
-Respond with ONLY the blog topic phrase (5 to 10 words). No explanation, no punctuation at end, no quotes."""
+Respond with ONLY the focus keyword phrase for the article (3 to 8 words). No explanation, no quotes."""
 
     topic = call_ai(messages=[{"role": "user", "content": prompt}],
                     max_tokens=60, tier="fast").strip(".").strip('"').strip("'")
-
-    if topic and state.is_duplicate(topic, used):
+    if topic and state.is_duplicate(topic, used + state.load_used_topics()):
         print("[WARN] Topic too similar to recent posts.")
         return None
     print(f"[OK] Discovered topic: {topic}")

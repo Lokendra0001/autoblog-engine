@@ -1,0 +1,141 @@
+# Bhandari TechFab LLP — GFRP rebar manufacturer (Surat, India)
+# Articles are uploaded to the website's Strapi (blogs collection). WordPress is not used.
+
+enabled: true
+posts_per_day: 1
+posts_per_month: 8          # automatic monthly plan
+publish_weekdays: [1, 4]    # Tuesday and Friday (0=Mon … 6=Sun)
+timezone: "Asia/Kolkata"
+topic_mode: trending
+min_words: 1100
+max_words: 1500
+publish_to: strapi         # strapi | wordpress | files (PUBLISH_TO in .env overrides)
+
+strapi:
+  url: "https://api.bhandaritechfab.com"
+  token: "${STRAPI_API_TOKEN}"   # set in .env; leave empty to only save previews
+  status: "draft"                # "draft" = review in the admin first; "published" = live immediately
+  blog_path: "/blogs"
+
+wordpress:
+  site_url: ""
+  username: ""
+  app_password: ""
+
+brand:
+  name: "Bhandari TechFab"
+  website: "https://www.bhandaritechfab.com"
+  location: "Surat, Gujarat, India"
+  voice: >
+    Authoritative, precise and professional, like a senior structural engineer writing for
+    peers and project decision-makers. Clear, well-structured Indian English. Technical where it
+    matters, never vague, never salesy. No hype, no slang, no casual asides.
+  palette:
+    primary: "#014ca9"
+    deep: "#0f172a"
+    accent: "#facc15"
+    bg: "#ffffff"
+    text: "#0f172a"
+    text_grey: "#4b5563"
+    light_bg: "#eef4fc"
+  fonts:
+    heading: "DM Sans"
+    body: "DM Sans"
+
+audience: >
+  civil and structural engineers, consultants, contractors, architects, infrastructure developers
+  and government/PSU project authorities in India
+geo: "IN"
+geo_label: "India"
+
+context: |
+  Bhandari TechFab LLP manufactures Glass Fibre Reinforced Polymer (GFRP) reinforcement in Surat,
+  Gujarat, with branch offices in Pune and Bengaluru. GFRP rebar is a composite of high-strength
+  glass fibres in a polymer resin matrix, used as a corrosion-free alternative to TMT/steel
+  reinforcement in concrete.
+
+  Products:
+  - GFRP rebars, 3 mm to 32 mm diameter
+  - GFRP mesh (flatwork, precast, tunnels)
+  - GFRP bent bars and stirrups
+  - Custom-fabricated GFRP reinforcement
+
+  Standards: rebars are manufactured to IS 18256:2023, each lot is batch-tested to IS 18255:2023,
+  and the products comply with IRC:137. Internationally, ASTM D7957 and ACI 440 are the
+  reference standards for GFRP bars.
+
+  Key properties (state qualitatively unless a figure appears in the research data):
+  - Does not corrode in chloride, marine or chemical environments
+  - About 75% lighter than steel (roughly one-quarter the weight)
+  - High tensile strength, typically higher than Fe500 steel; lower elastic modulus than steel,
+    so designs are usually governed by serviceability (deflection and crack width)
+  - Non-magnetic and electrically non-conductive
+  - Long service life with low maintenance; lower lifecycle cost in aggressive environments
+
+  Applications: bridges and flyovers, RCC roads and highways, marine and coastal structures
+  (jetties, sea walls, ports), tunnels, water tanks and treatment plants, swimming pools,
+  MRI rooms and toll plazas, precast elements, chemical and industrial plants, airports.
+
+writing_notes: |
+  - Never quote prices: say they depend on diameter, quantity and site location, and point to a quotation.
+  - Mention genuine design considerations where relevant: lower elastic modulus than steel, bends must be
+    made at the factory, behaviour under fire exposure.
+  - Ground articles in Indian conditions: IS/IRC codes, coastal and monsoon exposure, Indian infrastructure.
+  - Cite research findings as "a 2024 bond-behaviour study found...", never by invented figures.
+
+cta:
+  type: "contact"
+  contact_url: "https://www.bhandaritechfab.com/contact"
+  headline: "Planning a project with GFRP reinforcement?"
+  subtext: "Get technical guidance, design support and a quotation from the Bhandari TechFab team."
+  button_text: "Request a Quote"
+
+categories:   # must match the website admin's category list
+  - "Education"
+  - "Comparison"
+  - "Applications"
+  - "Industry Use"
+  - "Benefits"
+  - "Manufacturing"
+  - "Finance"
+  - "Sustainability"
+  - "Awareness"
+  - "Trends"
+
+sitemap_url: ""
+internal_links: |
+  - GFRP products (rebars, mesh, bent bars): https://www.bhandaritechfab.com/our-products
+  - GFRP applications and uses: https://www.bhandaritechfab.com/application
+  - GFRP projects in India: https://www.bhandaritechfab.com/project
+  - Certificates and test reports (IS 18256, IRC:137): https://www.bhandaritechfab.com/certificates
+  - Knowledge hub: https://www.bhandaritechfab.com/knowledge-hub
+  - GFRP calculator: https://www.bhandaritechfab.com/calculator
+  - GFRP blog: https://www.bhandaritechfab.com/blogs
+  - About Bhandari TechFab: https://www.bhandaritechfab.com/about
+  - Contact / price and quotation: https://www.bhandaritechfab.com/contact
+
+sources:
+  news_query: "GFRP rebar India"
+  keyword_exclude:            # kinds of Google searches never to plan articles for
+    - "marketplaces (e.g. IndiaMART)"
+    - "machines for making rebar"
+    - "Hindi-language queries"
+  keyword_seeds:              # expanded with Google search suggestions when planning the month
+    - "gfrp rebar"
+    - "gfrp bars"
+    - "frp rebar"
+    - "gfrp reinforcement"
+    - "fiberglass rebar"
+  news_queries:
+    - "GFRP reinforcement concrete"
+    - "FRP rebar bridge construction"
+    - "rebar corrosion concrete structures India"
+    - "coastal infrastructure project India"
+    - "bridge flyover construction India"
+    - "IRC IS code construction India"
+    - "sustainable construction materials India"
+  google_trends: false
+  company_feeds: []
+  blog_feeds: []
+  youtube_channels: []
+  breaking_feeds: []

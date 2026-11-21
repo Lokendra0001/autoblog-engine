@@ -15,6 +15,8 @@ import requests
 def clear_wp_cache(client):
     auth = (client.wordpress.username, client.wordpress.app_password)
     base = client.wordpress.site_url
+    if not base:
+        return
     for endpoint in (f"{base}/wp-json/w3tc/v1/flush",
                      f"{base}/wp-json/wp-super-cache/v1/cache",
                      f"{base}/wp-json/litespeed/v1/purge/all"):

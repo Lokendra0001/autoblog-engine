@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+venv/
+data/
+tests/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.DS_Store
+*.md
+PRODUCT_PLAN.md

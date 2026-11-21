@@ -5,3 +5,4 @@ clients/*/assets/*.png
 __pycache__/
 *.pyc
 *credentials*.json
+venv/

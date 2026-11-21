@@ -1,9 +1,7 @@
-anthropic
-openai>=1.0.0
 requests
 urllib3
 certifi
 pyyaml
 google-genai
 google-auth
-pillow
+tzdata

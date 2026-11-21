@@ -7,8 +7,16 @@ never bleeds across tenants.
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import datetime, timezone
+
+
+_STOPWORDS = {
+    "the", "and", "for", "with", "from", "how", "what", "why", "when", "which", "this", "that", "your",
+    "its", "into", "about", "are", "can", "use", "using", "vs", "versus", "guide", "complete", "best",
+    "top", "tips", "ways", "new", "india", "indian", "2025", "2026", "2027",
+}
 
 
 class ClientState:
@@ -33,27 +41,36 @@ class ClientState:
             f.write(f"{date_str} | {topic}\n")
 
     @staticmethod
-    def is_duplicate(new_topic: str, used_lines: list[str]) -> bool:
-        stopwords = {
-            "a", "an", "the", "and", "or", "for", "in", "on", "of", "to", "is", "it",
-            "how", "what", "why", "with", "from", "by", "at", "this", "that", "your",
-            "2026", "2025", "business", "businesses", "small", "best", "top", "guide",
-            "complete", "full", "tips", "strategy", "ways", "just", "launched", "release",
-            "update", "new", "know", "need", "needs", "work", "works", "using", "use",
-            "get", "make", "about", "will", "has", "have", "been", "into", "their",
-            "which", "when", "every", "also", "more",
-        }
+    def topic_words(text: str) -> set[str]:
+        """Meaningful words of a topic/title, lightly stemmed ("designing" ~ "design", "tanks" ~ "tank")."""
+        words = set()
+        for w in re.findall(r"[a-z0-9]+", text.lower()):
+            if w in _STOPWORDS or len(w) < 3:
+                continue
+            for suffix in ("ing", "es", "s"):
+                if w.endswith(suffix) and len(w) - len(suffix) >= 4:
+                    w = w[: -len(suffix)]
+                    break
+            words.add(w)
+        return words
 
-        def keywords(text):
-            words = re.findall(r"[a-z]+", text.lower())
-            return {w for w in words if w not in stopwords and len(w) > 3}
+    @classmethod
+    def similar(cls, a: str, b: str) -> bool:
+        """Same topic? Most meaningful words of the shorter phrase appear in the other one.
+        "GFRP rebar for water tanks" ~ "GFRP Rebar for Water Tanks: Corrosion-Free Reinforcement",
+        but not ~ "GFRP Rebar for Bridge Decks"."""
+        wa, wb = cls.topic_words(a), cls.topic_words(b)
+        small = min(len(wa), len(wb))
+        if small == 0:
+            return False
+        shared = len(wa & wb)
+        if small < 3:
+            return wa == wb
+        return shared >= max(3, math.ceil(0.75 * small))
 
-        new_keys = keywords(new_topic)
-        for line in used_lines:
-            topic = line.split(" | ", 1)[-1] if " | " in line else line
-            if len(new_keys & keywords(topic)) >= 3:
-                return True
-        return False
+    @classmethod
+    def is_duplicate(cls, new_topic: str, used_lines: list[str]) -> bool:
+        return any(cls.similar(new_topic, line.split(" | ", 1)[-1]) for line in used_lines)
 
     # ── posted headlines (breaking-news dedupe) ───────────────────────────
     @staticmethod

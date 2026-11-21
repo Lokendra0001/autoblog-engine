@@ -43,9 +43,34 @@ def _interpolate_env(value: Any) -> Any:
 
 @dataclass
 class WordPress:
-    site_url: str
-    username: str
-    app_password: str
+    site_url: str = ""
+    username: str = ""
+    app_password: str = ""
+    status: str = "publish"        # "publish" (live at once) or "draft"
+
+
+# Article values the app can send to Strapi -> the field name in your Strapi collection.
+# Leave a value empty (or remove it) to not send that value. `title` and `slug` are required.
+STRAPI_DEFAULT_FIELDS = {
+    "title": "title", "slug": "slug", "content": "content", "image": "image",
+    "category": "category", "date": "date", "readTime": "readTime", "imageSource": "imageSource",
+    "meta_description": "", "focus_keyword": "", "tags": "",
+}
+
+
+@dataclass
+class Strapi:
+    """Strapi v5 CMS target (optional)."""
+    url: str = ""                  # e.g. https://cms.example.com
+    token: str = ""                # API token: find/create (+ update) on the collection, Upload upload
+    status: str = "draft"          # "draft" (review in admin, then publish) or "published"
+    collection: str = "blogs"      # the collection's API name (plural), as in /api/<collection>
+    blog_path: str = "/blogs"      # public URL of a post: brand.website + blog_path + "/" + slug
+    fields: dict = field(default_factory=dict)  # overrides for STRAPI_DEFAULT_FIELDS
+
+    def field_map(self) -> dict:
+        """Our value name -> Strapi field name, only for values that are sent."""
+        return {k: v for k, v in {**STRAPI_DEFAULT_FIELDS, **(self.fields or {})}.items() if v}
 
 
 @dataclass
@@ -57,7 +82,7 @@ class Brand:
         "confident, clear, and practical — no fluff, no em dashes, no jargon. "
         "Simple British-style English, like explaining to a smart friend who runs a business."
     )
-    # Palette drives the generated HTML/CSS template and image prompts.
+    # Palette colours the CTA block and the preview page.
     palette: dict = field(default_factory=lambda: {
         "primary": "#1e90ff",
         "deep": "#003C8F",
@@ -71,7 +96,6 @@ class Brand:
         "heading": "Montserrat",
         "body": "Open Sans",
     })
-    logo: str = "assets/logo.png"  # relative to the client folder
 
 
 @dataclass
@@ -101,6 +125,10 @@ class Sources:
     ])
     youtube_channels: list = field(default_factory=list)  # [[channel_id, label], ...]
     news_query: str = "AI tools digital marketing 2026"
+    news_queries: list = field(default_factory=list)  # extra Google News searches for the niche
+    keyword_seeds: list = field(default_factory=list)  # core terms expanded via Google suggestions
+    keyword_exclude: list = field(default_factory=list)  # kinds of searches never to plan, e.g. "job vacancies"
+    google_trends: bool = True  # general daily trends; turn off for niche B2B topics
     breaking_feeds: list = field(default_factory=lambda: [
         ["https://openai.com/blog/rss.xml", "OPENAI"],
         ["https://www.anthropic.com/news/rss.xml", "ANTHROPIC"],
@@ -117,6 +145,8 @@ class ClientConfig:
     brand: Brand
     cta: CTA
     sources: Sources
+    strapi: Strapi = field(default_factory=Strapi)
+    publish_to: str = ""                  # strapi | wordpress | files ("" = whichever is configured)
     audience: str = "small business owners and entrepreneurs"
     geo: str = "IN"                       # Google Trends/News geo
     geo_label: str = "India"
@@ -125,11 +155,17 @@ class ClientConfig:
         "Business Automation", "Content Marketing", "Paid Advertising",
         "Web Development", "Growth Hacking", "Email Marketing",
     ])
+    context: str = ""                     # company/product knowledge the writer must rely on
+    writing_notes: str = ""               # extra writing rules for this niche (added to the prompt)
     internal_links: str = ""              # freeform block injected into the writer prompt
     sitemap_url: str = ""                 # used to pull recent posts for dynamic linking
     posts_per_day: int = 1
+    posts_per_month: int = 8              # monthly planner target (auto mode)
+    timezone: str = "Asia/Kolkata"        # the client's local time: decides "today" for the plan
+    publish_weekdays: list = field(default_factory=lambda: [1, 4])  # 0=Mon … 6=Sun
     topic_mode: str = "trending"          # "trending" | "breaking" | "evergreen_queue"
     min_words: int = 1400
+    max_words: int = 0                    # 0 = no upper limit
     indexnow_key: str = ""
     google_indexing_credentials: str = "" # path to service-account json (optional)
 
@@ -137,17 +173,26 @@ class ClientConfig:
     config_dir: Path = field(default=None, repr=False)
 
     @property
+    def destination(self) -> str:
+        """Where finished articles go: "strapi", "wordpress" or "files" (saved locally only)."""
+        if self.publish_to:
+            return self.publish_to
+        if self.strapi.url and self.strapi.token:
+            return "strapi"
+        if self.wordpress.site_url and self.wordpress.app_password:
+            return "wordpress"
+        return "files"
+
+    @property
+    def drafts_dir(self) -> Path:
+        """Every article is saved here (.html preview, .json export, .jpg cover), whatever the destination."""
+        return self.data_dir / "drafts"
+
+    @property
     def data_dir(self) -> Path:
         d = DATA_DIR / self.id
         d.mkdir(parents=True, exist_ok=True)
         return d
-
-    @property
-    def logo_path(self) -> Path | None:
-        if not self.brand.logo:
-            return None
-        p = (self.config_dir / self.brand.logo) if self.config_dir else Path(self.brand.logo)
-        return p if p.exists() else None
 
 
 def _build(dataclass_type, data: dict):
@@ -165,14 +210,38 @@ def load_client(client_id: str) -> ClientConfig:
     raw = _interpolate_env(raw)
     raw["id"] = client_id
 
-    raw["wordpress"] = _build(WordPress, raw.get("wordpress", {}))
+    raw["wordpress"] = _build(WordPress, raw.get("wordpress") or {})
     raw["brand"] = _build(Brand, raw.get("brand", {}))
     raw["cta"] = _build(CTA, raw.get("cta", {}))
     raw["sources"] = _build(Sources, raw.get("sources", {}))
+    raw["strapi"] = _build(Strapi, raw.get("strapi") or {})
 
     client = _build(ClientConfig, raw)
     client.config_dir = cfg_path.parent
+    _apply_env_overrides(client)
     return client
+
+
+_DAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+DESTINATIONS = ("strapi", "wordpress", "files")
+
+
+def _apply_env_overrides(client) -> None:
+    """PUBLISH_TO, POSTS_PER_MONTH and PUBLISH_DAYS in .env override the client's config."""
+    client.publish_to = (os.getenv("PUBLISH_TO", "").strip() or client.publish_to or "").lower()
+    if client.publish_to and client.publish_to not in DESTINATIONS:
+        raise ValueError(f"publish_to / PUBLISH_TO must be one of {', '.join(DESTINATIONS)}, got '{client.publish_to}'")
+    if (n := os.getenv("POSTS_PER_MONTH", "").strip()):
+        if not n.isdigit() or not 1 <= int(n) <= 31:
+            raise ValueError(f"POSTS_PER_MONTH must be a number from 1 to 31, got '{n}'")
+        client.posts_per_month = int(n)
+    if (days := os.getenv("PUBLISH_DAYS", "").strip()):
+        try:
+            client.publish_weekdays = sorted({_DAYS[d.strip().lower()[:3]] for d in days.split(",") if d.strip()})
+        except KeyError:
+            raise ValueError(f"PUBLISH_DAYS must be weekday names like 'tue,fri', got '{days}'") from None
 
 
 def list_clients(enabled_only: bool = False) -> list[str]:

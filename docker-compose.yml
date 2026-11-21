@@ -1,0 +1,39 @@
+# Start:   docker compose up -d --build
+# Logs:    docker compose logs -f writer
+# Web UI:  docker compose --profile web up -d   (needs CLIENT=<id> in .env), then open http://127.0.0.1:8000
+services:
+  writer:
+    build: .
+    image: autoblog-engine
+    container_name: autoblog-engine
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      SCHEDULE_TIME: ${SCHEDULE_TIME:-09:07}
+      SCHEDULE_TZ: ${SCHEDULE_TZ:-Asia/Kolkata}
+    volumes:
+      - seo-data:/app/data
+      - ./clients:/app/clients:ro   # edit config.yaml, then: docker compose restart writer
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Optional local test page (preview articles, see the plan). Only reachable from the host itself.
+  web:
+    profiles: ["web"]
+    image: autoblog-engine
+    container_name: autoblog-engine-web
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    command: ["sh", "-c", "exec python cli.py serve \"$${CLIENT:?set CLIENT in .env}\" --host 0.0.0.0 --port 8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - seo-data:/app/data
+      - ./clients:/app/clients:ro
+    depends_on: [writer]
+
+volumes:
+  seo-data:

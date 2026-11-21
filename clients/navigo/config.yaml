@@ -30,7 +30,6 @@ brand:
   fonts:
     heading: "Montserrat"
     body: "Open Sans"
-  logo: "assets/logo.png"
 
 audience: "Indian small business owners, entrepreneurs and marketing managers"
 geo: "IN"
