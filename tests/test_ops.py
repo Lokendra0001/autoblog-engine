@@ -59,6 +59,7 @@ class RunDueTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.c = _client()
+        self.c.max_news_per_month = 0  # the publish-day news check has its own tests
         patcher = mock.patch.object(type(self.c), "data_dir", new_callable=mock.PropertyMock,
                                     return_value=Path(self.tmp.name))
         patcher.start()
@@ -98,10 +99,61 @@ class RunDueTests(unittest.TestCase):
         item, events = self._run(side_effect=RuntimeError("quota"))
         self.assertEqual((item["status"], item["attempts"], events[0]["kind"]), ("planned", 1, "retry"))
 
+    def test_pull_next_writes_the_next_article_today(self):
+        with mock.patch.object(pipeline, "preview_article", side_effect=pipeline.AlreadyOnSite("x")) as p, \
+             mock.patch.object(notify, "run_report"):
+            planner.run_due(self.c, today=date(2026, 11, 22), pull_next=True)
+        p.assert_called_once()
+        self.assertEqual(planner.load_plan(self.c, "2026-11")["items"][0]["date"], "2026-11-22")
+
     def test_nothing_due_before_date(self):
         with mock.patch.object(pipeline, "preview_article") as p, mock.patch.object(notify, "run_report"):
             planner.run_due(self.c, today=date(2026, 11, 23))
         p.assert_not_called()
+
+
+class NewsTopicTests(unittest.TestCase):
+    """Publish day: a relevant fresh news topic replaces the planned one; otherwise the plan stands."""
+
+    setUp = RunDueTests.setUp
+
+    def _run_with(self, ai_reply, site=()):
+        self.c.max_news_per_month = 1
+        data = {"title": "T", "category": "Industry Use", "readTime": "6 min read", "review": {"score": 9, "notes": []}}
+        with mock.patch.object(planner.trends, "gather_headlines", return_value=["NHAI approves GFRP for coastal bridges"]), \
+             mock.patch.object(pipeline, "site_titles", return_value=list(site)), \
+             mock.patch.object(planner, "call_ai", return_value=json.dumps(ai_reply)), \
+             mock.patch.object(pipeline, "preview_article", return_value={"path": Path("x.html"), "title": "T", "data": data}) as p, \
+             mock.patch.object(notify, "run_report") as report:
+            planner.run_due(self.c, today=date(2026, 11, 24))
+        return p.call_args[0][1], planner.load_plan(self.c, "2026-11")["items"][0], report.call_args[0][1]
+
+    def test_relevant_news_replaces_planned_topic(self):
+        kw, item, events = self._run_with({"use_news": True, "reason": "new policy", "keyword": "GFRP rebar NHAI approval",
+                                           "angle": "What the approval means", "category": "Industry Use"})
+        self.assertEqual(kw, "GFRP rebar NHAI approval")
+        self.assertEqual((item["planned_keyword"], item["news_checked"]), ("gfrp rebar for bridge decks", True))
+        self.assertEqual(events[0]["planned_keyword"], "gfrp rebar for bridge decks")
+
+    def test_monthly_news_limit_reached_skips_news_check(self):
+        plan = planner.load_plan(self.c, "2026-11")
+        plan["items"].insert(0, {"date": "2026-11-03", "keyword": "news one", "planned_keyword": "x", "status": "done",
+                                 "category": "Trends", "angle": "", "attempts": 0, "title": "N", "draft": "n.html"})
+        planner.save_plan(self.c, plan)
+        with mock.patch.object(planner, "_fresh_topic") as fresh:
+            kw, _, _ = self._run_with({"use_news": True, "keyword": "unused"})
+        fresh.assert_not_called()
+        self.assertEqual(kw, "gfrp rebar for bridge decks")
+
+    def test_no_relevant_news_keeps_planned_topic(self):
+        kw, item, _ = self._run_with({"use_news": False, "reason": "nothing relevant"})
+        self.assertEqual(kw, "gfrp rebar for bridge decks")
+        self.assertNotIn("planned_keyword", item)
+
+    def test_news_topic_already_covered_is_ignored(self):
+        kw, _, _ = self._run_with({"use_news": True, "keyword": "GFRP rebar for water tanks", "category": "x"},
+                                  site=["GFRP Rebar for Water Tanks: Corrosion-Free Reinforcement"])
+        self.assertEqual(kw, "gfrp rebar for bridge decks")
 
 
 class ResearchParsingTests(unittest.TestCase):

@@ -8,8 +8,9 @@
 AutoBlog Engine writes and publishes blog articles for your business by itself. Every month it:
 
 1. finds what your customers search for on Google,
-2. plans the topics (skipping anything already on your site),
-3. researches each topic and writes the article,
+2. plans the month's topics around those searches (skipping anything already on your site),
+3. researches each topic on its publish day and writes the article. If there's important news in your
+   field that week, one article a month can cover it instead (`max_news_per_month`),
 4. checks the quality and rewrites it if needed,
 5. publishes it on your chosen days and emails you.
 
@@ -94,6 +95,7 @@ docker compose down                # stop it
 git pull && docker compose up -d --build                         # update to the latest version
 docker compose run --rm writer python cli.py validate mybusiness # check your setup
 docker compose run --rm writer python cli.py run mybusiness      # write one article now
+docker compose run --rm writer python cli.py run-next mybusiness # test the full daily job now
 ```
 
 ## Without Docker

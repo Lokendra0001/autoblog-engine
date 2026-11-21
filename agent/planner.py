@@ -18,6 +18,7 @@ from .ai import call_ai
 from .state import ClientState
 
 MAX_ATTEMPTS = 3
+NEWS_DAYS = 7  # how far back the publish-day news check looks
 
 
 def _plan_path(client, month: str):
@@ -128,12 +129,62 @@ Return a JSON array of {len(dates) + 3} objects with keys:
     return plan
 
 
+def _fresh_topic(client, it, used: list[str]) -> dict | None:
+    """On the publish day: a topic from the last week's news that deserves the article more than the
+    planned one, or None (then the planned topic is written). Never raises."""
+    headlines = trends.gather_headlines(client, days=NEWS_DAYS, extra_queries=client.sources.keyword_seeds)
+    if not headlines:
+        print(f"[NEWS] No news in the last {NEWS_DAYS} days; writing the planned topic.")
+        return None
+    prompt = f"""You choose today's blog article for {client.brand.name}.
+
+ABOUT THE COMPANY:
+{client.context or client.brand.name}
+
+READERS: {client.audience} in {client.geo_label}
+CATEGORIES: {", ".join(client.categories)}
+
+PLANNED TOPIC (the default): "{it['keyword']}" ({it.get('category', '')}): {it.get('angle', '')}
+
+NEWS FROM THE LAST {NEWS_DAYS} DAYS:
+{chr(10).join(headlines[:60])}
+
+ALREADY PUBLISHED OR PLANNED (never repeat these topics):
+{chr(10).join(used[-120:]) or "None yet."}
+
+Is there a news item that is a real, relevant development for these readers (a new project, policy,
+standard, study, market change or event related to the company's products or industry in
+{client.geo_label}) and gives enough substance for a useful article today? Be strict: generic, unrelated,
+promotional, foreign-only or minor news does not count. If nothing qualifies, keep the planned topic.
+
+Return JSON: {{"use_news": true or false, "reason": "one short sentence",
+"keyword": "2-6 word focus keyword, at most 45 characters, starting with the main term",
+"angle": "1-2 sentence brief, mentioning the news", "category": "one of the categories above"}}
+(keyword, angle and category only when use_news is true)."""
+    try:
+        data = json.loads(call_ai(messages=[{"role": "user", "content": prompt}], max_tokens=600,
+                                  tier="fast", json_mode=True))
+    except Exception as e:
+        print(f"[NEWS] News check failed ({str(e)[:120]}); writing the planned topic.")
+        return None
+    if not isinstance(data, dict) or not data.get("use_news"):
+        print(f"[NEWS] Keeping the planned topic: {(data or {}).get('reason', 'no relevant news')}")
+        return None
+    kw = str(data.get("keyword", "")).strip()
+    if not kw or ClientState.is_duplicate(kw, used):
+        print(f"[NEWS] News topic \"{kw}\" is empty or already covered; writing the planned topic.")
+        return None
+    print(f"[NEWS] Using a fresh news topic: {kw} ({data.get('reason', '')})")
+    return {"keyword": kw, "angle": str(data.get("angle", "")).strip(),
+            "category": str(data.get("category", "")).strip()}
+
+
 def _article_event(client, it, result) -> dict | None:
     """Notification event for a written article, based on its upload outcome."""
     data, up = result["data"], result.get("upload")
     base = {"title": data["title"], "keyword": it["keyword"], "category": data["category"],
             "read_time": data["readTime"], "score": data.get("review", {}).get("score"),
-            "notes": data.get("review", {}).get("notes", [])}
+            "notes": data.get("review", {}).get("notes", []), "planned_keyword": it.get("planned_keyword", "")}
     if not up:  # destination "files": saved only
         return {**base, "kind": "saved", "file": result["path"].name if result.get("path") else ""}
     if up["result"] == "uploaded":
@@ -144,9 +195,10 @@ def _article_event(client, it, result) -> dict | None:
     return {"kind": "upload_failed", "title": data["title"], "error": up.get("reason", "")}
 
 
-def run_due(client, today: date | None = None):
+def run_due(client, today: date | None = None, pull_next: bool = False):
     """Create this month's plan if needed, write every due article and upload it. Safe to run daily.
-    Sends one summary email per run when anything happened (see agent/notify.py)."""
+    Sends one summary email per run when anything happened (see agent/notify.py).
+    pull_next=True moves the next planned article to today first (to test the full daily workflow)."""
     today = today or local_today(client)
     month = today.strftime("%Y-%m")
     events: list[dict] = []
@@ -155,6 +207,14 @@ def run_due(client, today: date | None = None):
         plan = create_plan(client, today)
         if plan["items"]:
             events.append({"kind": "plan", "month": month, "items": plan["items"]})
+    if pull_next:
+        nxt = next((it for it in plan["items"] if it["status"] == "planned"), None)
+        if not nxt:
+            print(f"[AUTO] [{client.id}] No planned articles left in {month}.")
+        elif nxt["date"] > today.isoformat():
+            print(f"[AUTO] [{client.id}] Moving \"{nxt['keyword']}\" from {nxt['date']} to today.")
+            nxt["date"] = today.isoformat()
+            save_plan(client, plan)
     try:
         _run_plan(client, plan, today, events)
     finally:
@@ -182,6 +242,16 @@ def _run_plan(client, plan, today, events):
         return
 
     for it in due:
+        news_used = sum(1 for x in plan["items"] if x.get("planned_keyword"))
+        if news_used < client.max_news_per_month and not it.get("news_checked"):
+            used = (pipeline.site_titles(client) + trends.used_topic_list(ClientState(client), limit=100)
+                    + [x["keyword"] for x in plan["items"] if x is not it])
+            fresh = _fresh_topic(client, it, used)
+            if fresh:
+                it["planned_keyword"] = it["keyword"]
+                it.update(fresh)
+            it["news_checked"] = True  # a retry tomorrow writes the same topic
+            save_plan(client, plan)
         print(f"\n[AUTO] [{client.id}] Writing: {it['keyword']} (planned for {it['date']})")
         brief = it["angle"]
         if it["category"] in client.categories:

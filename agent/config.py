@@ -164,6 +164,7 @@ class ClientConfig:
     timezone: str = "Asia/Kolkata"        # the client's local time: decides "today" for the plan
     publish_weekdays: list = field(default_factory=lambda: [1, 4])  # 0=Mon … 6=Sun
     topic_mode: str = "trending"          # "trending" | "breaking" | "evergreen_queue"
+    max_news_per_month: int = 1           # publish days that may swap the planned topic for fresh news (0 = never)
     min_words: int = 1400
     max_words: int = 0                    # 0 = no upper limit
     indexnow_key: str = ""

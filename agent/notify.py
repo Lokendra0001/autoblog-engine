@@ -102,7 +102,9 @@ def run_report(client, events: list[dict]) -> None:
             notes = "".join(f"<li>{html.escape(n[:220])}</li>" for n in (e.get("notes") or [])[:4])
             rows = (_row("Title", f"<b>{html.escape(e['title'])}</b>") + _row("Keyword", html.escape(e["keyword"]))
                     + _row("Category", html.escape(e.get("category", ""))) + _row("Length", html.escape(e.get("read_time", "")))
-                    + (_row("Editor score", f"{score}/10") if score else ""))
+                    + (_row("Editor score", f"{score}/10") if score else "")
+                    + (_row("Topic", "From this week's news (instead of “"
+                            + html.escape(e["planned_keyword"]) + "”)") if e.get("planned_keyword") else ""))
             if k == "published":
                 action = _button(e["url"], "View the live post")
             elif k == "draft":
@@ -136,7 +138,10 @@ def run_report(client, events: list[dict]) -> None:
         elif k == "plan":
             items = "".join(f"<li>{html.escape(i['date'])} · <b>{html.escape(i['keyword'])}</b> "
                             f"<span style='color:#6b7280'>({html.escape(i['category'])})</span></li>" for i in e["items"])
-            blocks.append(f"<h3 style='margin:0 0 8px'>Content plan for {html.escape(e['month'])}</h3><ul>{items}</ul>")
+            n = client.max_news_per_month
+            blocks.append(f"<h3 style='margin:0 0 8px'>Content plan for {html.escape(e['month'])}</h3><ul>{items}</ul>"
+                          + (f"<p style='color:#6b7280'>If there is relevant news that week, up to {n} of these "
+                             f"may be replaced by a fresh news topic on the day.</p>" if n else ""))
     send(f"[{client.brand.name}] {subject}",
          _layout(client, subject, "<hr style='border:0;border-top:1px solid #e5e7eb;margin:16px 0'>".join(blocks)))
 

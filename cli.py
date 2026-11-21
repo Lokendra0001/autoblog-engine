@@ -10,6 +10,7 @@ Usage:
   python cli.py serve <client> [--port 8000] Local web page to generate & view articles
   python cli.py plan <client> [--new]        Show (or create) this month's content plan
   python cli.py auto                         Daily job: plan the month + write & upload due articles
+  python cli.py run-next <client>            Same daily job, with the next planned article moved to today
   python cli.py push <client> <draft-name>   Upload a saved article to Strapi (skips if already there)
   python cli.py schedule on|off|status       Run `auto` daily at SCHEDULE_TIME (launchd on macOS, cron on Linux)
   python cli.py notify-test                  Send a test notification email
@@ -144,19 +145,28 @@ def _trim_log(max_bytes=5_000_000, keep=1_000_000):
         LOG.write_bytes(data[data.find(b"\n") + 1:])
 
 
+def _run_lock():
+    """Exclusive lock so two runs never write at the same time. Returns the open lock file, or None."""
+    import fcntl
+    (ROOT / "data").mkdir(exist_ok=True)
+    lock = open(ROOT / "data" / ".auto.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lock
+    except BlockingIOError:
+        print("[AUTO] Another run is in progress; exiting.")
+        return None
+
+
 def cmd_auto(_):
     """Daily job for every enabled client. One run at a time (a second one exits immediately)."""
-    import fcntl
     import traceback
     from datetime import datetime
     from agent import notify, planner
     LOG.parent.mkdir(exist_ok=True)
     _trim_log()
-    lock = open(ROOT / "data" / ".auto.lock", "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print("[AUTO] Another run is in progress; exiting.")
+    lock = _run_lock()
+    if not lock:
         return
     print(f"\n===== auto run {datetime.now().isoformat(timespec='seconds')} =====")
     for cid in config.list_clients(enabled_only=True):
@@ -166,6 +176,15 @@ def cmd_auto(_):
             err = traceback.format_exc()
             print(f"[ERROR] [{cid}] auto run failed:\n{err}")
             notify.crash(f"client '{cid}'", err)
+
+
+def cmd_run_next(args):
+    """The real daily job for one client, with its next planned article moved to today (a full test)."""
+    from agent import planner
+    lock = _run_lock()
+    if not lock:
+        return
+    planner.run_due(config.load_client(args.client), pull_next=True)
 
 
 def _local_run_time():
@@ -330,6 +349,7 @@ def main():
     pl.set_defaults(func=cmd_plan)
 
     sub.add_parser("auto").set_defaults(func=cmd_auto)
+    rn = sub.add_parser("run-next"); rn.add_argument("client"); rn.set_defaults(func=cmd_run_next)
 
     sc = sub.add_parser("schedule"); sc.add_argument("action", choices=["on", "off", "status"])
     sc.set_defaults(func=cmd_schedule)

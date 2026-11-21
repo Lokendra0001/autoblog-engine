@@ -7,6 +7,8 @@ posts_per_month: 8          # automatic monthly plan
 publish_weekdays: [1, 4]    # Tuesday and Friday (0=Mon … 6=Sun)
 timezone: "Asia/Kolkata"
 topic_mode: trending
+max_news_per_month: 1       # up to this many articles a month may be about fresh news (last 7 days)
+                            # instead of the planned topic; the rest stay on planned topics. 0 = never
 min_words: 1100
 max_words: 1500
 publish_to: strapi         # strapi | wordpress | files (PUBLISH_TO in .env overrides)

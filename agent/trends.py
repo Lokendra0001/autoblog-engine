@@ -64,8 +64,8 @@ def fetch_rss_titles(url, label, limit=8, with_age=False):
         return []
 
 
-def gather_headlines(client, per_query=8):
-    """Collect today's niche headlines from the client's configured sources (deduplicated)."""
+def gather_headlines(client, per_query=8, days=30, extra_queries=()):
+    """Collect recent niche headlines (last `days` days) from the client's sources (deduplicated)."""
     headlines = []
     src = client.sources
     for feed_url, label in src.company_feeds:
@@ -77,9 +77,9 @@ def gather_headlines(client, per_query=8):
             f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}", label=label, limit=2)
 
     geo = client.geo
-    for query in [src.news_query, *src.news_queries]:
+    for query in dict.fromkeys([src.news_query, *src.news_queries, *extra_queries]):
         if query:
-            url = (f"https://news.google.com/rss/search?q={quote(query)}+when:30d"
+            url = (f"https://news.google.com/rss/search?q={quote(query)}+when:{days}d"
                    f"&hl=en-{geo}&gl={geo}&ceid={geo}:en")
             headlines += fetch_rss_titles(url, label="NEWS", limit=per_query)
     if src.google_trends:

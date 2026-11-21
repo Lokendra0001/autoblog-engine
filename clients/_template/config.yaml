@@ -16,6 +16,8 @@ publish_weekdays: [1, 4]    # 0=Mon 1=Tue 2=Wed 3=Thu 4=Fri 5=Sat 6=Sun
 timezone: "Asia/Kolkata"    # the business's local time: decides which day "today" is
 posts_per_day: 1            # for the manual `run` / `run-all` commands
 topic_mode: trending        # manual `run`: trending | breaking | evergreen_queue
+max_news_per_month: 1       # up to this many articles a month may be about fresh news (last 7 days)
+                            # instead of the planned topic; the rest stay on planned topics. 0 = never
 
 # ── Where finished articles go ──
 # strapi    upload to your Strapi CMS (settings in `strapi:` below)
