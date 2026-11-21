@@ -5,16 +5,36 @@
 [![tests](https://github.com/navigotechsolutions-labs/autonomous-seo-writer/actions/workflows/tests.yml/badge.svg)](https://github.com/navigotechsolutions-labs/autonomous-seo-writer/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-AutoBlog Engine writes and publishes blog articles for your business by itself. Every month it:
+AutoBlog Engine writes and publishes blog articles for your business by itself, on the days you
+choose, using free services only.
 
-1. finds what your customers search for on Google,
-2. plans the month's topics around those searches (skipping anything already on your site),
-3. researches each topic on its publish day and writes the article. If there's important news in your
-   field that week, one article a month can cover it instead (`max_news_per_month`),
-4. checks the quality and rewrites it if needed,
-5. publishes it on your chosen days and emails you.
+## How it works
 
-It uses free services only (Gemini, Unsplash, Google search, Resend).
+It checks once a day. Here's what happens and which key each step uses:
+
+**Once a month: plan the topics**
+
+| Step | Uses |
+|---|---|
+| Find what your customers search for on Google | Google suggestions (no key) |
+| Read the posts already on your site, so nothing repeats | `STRAPI_API_TOKEN` |
+| Pick the month's topics and dates | `GEMINI_API_KEY` |
+| Email you the plan | `RESEND_API_KEY` |
+
+**On each publish day: write one article**
+
+| Step | Uses |
+|---|---|
+| Check this week's news; one article a month can cover important news (`max_news_per_month`) | Google News (no key) + `GEMINI_API_KEY` |
+| Research the topic: real questions, research papers, news, background | Google, OpenAlex, Wikipedia (no key) |
+| Write the article | `GEMINI_API_KEY` |
+| Check it: SEO rules plus an AI editor score; rewrite up to 3 times if needed | `GEMINI_API_KEY` |
+| Add a cover photo and 2 images | `UNSPLASH_ACCESS_KEY` |
+| Upload it as a draft (or publish it) | `STRAPI_API_TOKEN` (or WordPress) |
+| Email you a link to review it | `RESEND_API_KEY` |
+
+Only Gemini and Unsplash are required. Without a CMS token, articles are just saved as files.
+Without Resend, it simply doesn't send emails. One article uses about 4 to 10 Gemini requests.
 
 ## Getting started
 
