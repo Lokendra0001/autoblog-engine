@@ -26,14 +26,14 @@ It checks once a day. Here's what happens and which key each step uses:
 | Step | Uses |
 |---|---|
 | Check this week's news; one article a month can cover important news (`max_news_per_month`) | Google News (no key) + `GEMINI_API_KEY` |
-| Research the topic: real questions, research papers, news, background | Google, OpenAlex, Wikipedia (no key) |
+| Research the topic: real questions, research papers, news, background | Google, Wikipedia (no key), OpenAlex (`OPENALEX_API_KEY`, free) |
 | Write the article | `GEMINI_API_KEY` |
 | Check it: SEO rules plus an AI editor score; rewrite up to 3 times if needed | `GEMINI_API_KEY` |
 | Add a cover photo and 2 images | `UNSPLASH_ACCESS_KEY` |
 | Upload it as a draft (or publish it) | `STRAPI_API_TOKEN` (or WordPress) |
 | Email you a link to review it | `RESEND_API_KEY` |
 
-Only Gemini and Unsplash are required. Without a CMS token, articles are just saved as files.
+Only Gemini and Unsplash are required. Without an OpenAlex key, articles just skip research papers. Without a CMS token, articles are just saved as files.
 Without Resend, it simply doesn't send emails. One article uses about 4 to 10 Gemini requests.
 
 ## Getting started

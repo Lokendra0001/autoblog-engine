@@ -11,6 +11,7 @@ facts from it; anything not in the brief or the company knowledge must stay qual
 
 from __future__ import annotations
 
+import os
 import re
 import xml.etree.ElementTree as ET
 from datetime import date
@@ -57,10 +58,12 @@ def _abstract(inverted: dict | None) -> str:
     return re.sub(r"^(abstract[:.\s]*)", "", text, flags=re.I).strip()
 
 
-# OpenAlex is occasionally briefly overloaded (503): retry twice, waiting a few seconds.
+# OpenAlex needs a free API key (openalex.org/settings/api); without one the shared daily allowance is
+# tiny and searches are refused (429). Brief overloads (5xx) are retried twice, a few seconds apart.
+OPENALEX_API_KEY = os.getenv("OPENALEX_API_KEY", "")
 _openalex = requests.Session()
 _openalex.mount("https://", HTTPAdapter(max_retries=Retry(
-    total=2, backoff_factor=4, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=("GET",))))
+    total=2, backoff_factor=4, status_forcelist=(500, 502, 503, 504), allowed_methods=("GET",))))
 
 
 def papers(keyword: str, limit=4, years=6) -> list[dict]:
@@ -74,11 +77,13 @@ def papers(keyword: str, limit=4, years=6) -> list[dict]:
                 "search": " ".join(words),
                 "filter": f"from_publication_date:{since},has_abstract:true,type:article",
                 "sort": "relevance_score:desc", "per_page": limit,
-                "select": "title,publication_year,abstract_inverted_index,primary_location"})
+                "select": "title,publication_year,abstract_inverted_index,primary_location",
+                **({"api_key": OPENALEX_API_KEY} if OPENALEX_API_KEY else {})})
             r.raise_for_status()
             results = r.json().get("results", [])
         except Exception as e:
-            print(f"[WARN] Research paper search failed: {e}")
+            hint = "" if OPENALEX_API_KEY else " (add a free OPENALEX_API_KEY to .env)"
+            print(f"[WARN] Research paper search failed{hint}: {str(e)[:160]}")
             return []
         if len(results) >= 2 or len(words) <= 2:
             out = []
