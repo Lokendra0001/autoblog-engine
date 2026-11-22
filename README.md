@@ -2,8 +2,7 @@
 
 **Your SEO blog on autopilot: researched, written and published for you.**
 
-[![tests](https://github.com/navigotechsolutions-labs/autonomous-seo-writer/actions/workflows/tests.yml/badge.svg)](https://github.com/navigotechsolutions-labs/autonomous-seo-writer/actions/workflows/tests.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 
 AutoBlog Engine writes and publishes blog articles for your business by itself, on the days you
 choose, using free services only.
