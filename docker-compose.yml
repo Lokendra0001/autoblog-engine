@@ -19,15 +19,14 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
-  # Optional local test page (preview articles, see the plan). Only reachable from the host itself.
+  # Web dashboard (preview articles, see the plan, trigger on demand). Runs automatically on port 8000.
   web:
-    profiles: ["web"]
     image: autoblog-engine
     container_name: autoblog-engine-web
     restart: unless-stopped
     init: true
     env_file: .env
-    command: ["sh", "-c", "exec python cli.py serve \"$${CLIENT:?set CLIENT in .env}\" --host 0.0.0.0 --port 8000"]
+    command: ["sh", "-c", "exec python cli.py serve \"$${CLIENT:-bhandari}\" --host 0.0.0.0 --port 8000"]
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
