@@ -13,7 +13,7 @@ import json
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from . import keywords, notify, pipeline, trends
+from . import keywords, pipeline, trends
 from .ai import call_ai
 from .state import ClientState
 
@@ -179,34 +179,14 @@ Return JSON: {{"use_news": true or false, "reason": "one short sentence",
             "category": str(data.get("category", "")).strip()}
 
 
-def _article_event(client, it, result) -> dict | None:
-    """Notification event for a written article, based on its upload outcome."""
-    data, up = result["data"], result.get("upload")
-    base = {"title": data["title"], "keyword": it["keyword"], "category": data["category"],
-            "read_time": data["readTime"], "score": data.get("review", {}).get("score"),
-            "notes": data.get("review", {}).get("notes", []), "planned_keyword": it.get("planned_keyword", "")}
-    if not up:  # destination "files": saved only
-        return {**base, "kind": "saved", "file": result["path"].name if result.get("path") else ""}
-    if up["result"] == "uploaded":
-        kind = "published" if up["status"] == "published" else "draft"
-        return {**base, "kind": kind, "url": up.get("url", ""), "document_id": up["documentId"]}
-    if up["result"] == "exists":
-        return {"kind": "exists", "title": data["title"], "existing": up["title"]}
-    return {"kind": "upload_failed", "title": data["title"], "error": up.get("reason", "")}
-
-
 def run_due(client, today: date | None = None, pull_next: bool = False):
     """Create this month's plan if needed, write every due article and upload it. Safe to run daily.
-    Sends one summary email per run when anything happened (see agent/notify.py).
     pull_next=True moves the next planned article to today first (to test the full daily workflow)."""
     today = today or local_today(client)
     month = today.strftime("%Y-%m")
-    events: list[dict] = []
     plan = load_plan(client, month)
     if not plan:
         plan = create_plan(client, today)
-        if plan["items"]:
-            events.append({"kind": "plan", "month": month, "items": plan["items"]})
     if pull_next:
         nxt = next((it for it in plan["items"] if it["status"] == "planned"), None)
         if not nxt:
@@ -215,13 +195,10 @@ def run_due(client, today: date | None = None, pull_next: bool = False):
             print(f"[AUTO] [{client.id}] Moving \"{nxt['keyword']}\" from {nxt['date']} to today.")
             nxt["date"] = today.isoformat()
             save_plan(client, plan)
-    try:
-        _run_plan(client, plan, today, events)
-    finally:
-        notify.run_report(client, events)
+    _run_plan(client, plan, today)
 
 
-def _run_plan(client, plan, today, events):
+def _run_plan(client, plan, today):
     # Uploads that failed earlier (e.g. the CMS was down) are retried first.
     for it in plan["items"]:
         if it["status"] == "done" and it.get("upload") == "failed" and client.destination != "files":
@@ -230,10 +207,6 @@ def _run_plan(client, plan, today, events):
             up = pipeline.upload_saved(client, path)
             it["upload"] = up["result"]
             save_plan(client, plan)
-            data = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
-            event = _article_event(client, it, {"data": data, "upload": up})
-            if event and event["kind"] != "upload_failed":  # don't repeat the same failure every day
-                events.append(event)
 
     due = [it for it in plan["items"] if it["status"] == "planned" and it["date"] <= today.isoformat()]
     if not due:
@@ -262,19 +235,13 @@ def _run_plan(client, plan, today, events):
                       written=datetime.now().isoformat(timespec="seconds"))
             if "upload" in result:
                 it["upload"] = result["upload"]["result"]
-            event = _article_event(client, it, result)
-            if event:
-                events.append(event)
         except pipeline.AlreadyOnSite as e:
             it.update(status="skipped", last_error=str(e))
-            events.append({"kind": "skipped", "keyword": it["keyword"], "reason": str(e)})
             print(f"[AUTO] [{client.id}] Skipped: {e}")
         except Exception as e:
             it["attempts"] += 1
             it["last_error"] = str(e)[:300]
             if it["attempts"] >= MAX_ATTEMPTS:
                 it["status"] = "failed"
-            events.append({"kind": "failed" if it["status"] == "failed" else "retry", "keyword": it["keyword"],
-                           "attempt": it["attempts"], "max": MAX_ATTEMPTS, "error": str(e)})
             print(f"[ERROR] [{client.id}] {it['keyword']}: {e} (attempt {it['attempts']}/{MAX_ATTEMPTS})")
         save_plan(client, plan)

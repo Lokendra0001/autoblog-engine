@@ -2,38 +2,55 @@
 
 **Your SEO blog on autopilot: researched, written and published for you.**
 
+AutoBlog Engine plans, writes and uploads blog articles for your business by itself, on the days you
+choose, using free services only. A web dashboard shows the monthly plan and lets you publish drafts
+with one click.
 
-
-AutoBlog Engine writes and publishes blog articles for your business by itself, on the days you
-choose, using free services only.
+![AutoBlog Engine dashboard: monthly content calendar, automatic publishing switch and one-click publish](docs/dashboard.png)
 
 ## How it works
 
-It checks once a day. Here's what happens and which key each step uses:
+One scheduled job runs **once a day** (at `SCHEDULE_TIME`). Each run does whatever is due:
 
-**Once a month: plan the topics**
+```
+daily run
+ ├─ 1. No plan for this month yet?  → plan the month's topics and dates
+ ├─ 2. Uploads that failed before?   → retry them
+ └─ 3. Articles dated today or earlier? → write and upload them (otherwise: "Nothing due today")
+```
+
+There are no separate jobs and no per-article times. An article goes out on the daily run of its date.
+If the machine was off that day, the next run catches up.
+
+### 1. Planning (first run of each month)
 
 | Step | Uses |
 |---|---|
 | Find what your customers search for on Google | Google suggestions (no key) |
-| Read the posts already on your site, so nothing repeats | `STRAPI_API_TOKEN` |
-| Pick the month's topics and dates | `GEMINI_API_KEY` |
-| Email you the plan | `RESEND_API_KEY` |
+| Gather recent headlines in your field | Google News (no key) |
+| Read every post already on your site, plus every topic written before | `STRAPI_API_TOKEN` (or WordPress) |
+| Pick the month's topics, angles, categories and dates, never repeating an existing one | `GEMINI_API_KEY` |
 
-**On each publish day: write one article**
+The plan is saved to `data/<client>/plans/YYYY-MM.json`. Duplicates are filtered in code too, in case
+the AI ignores the "already published" list.
+
+### 2. Writing (each publish day)
 
 | Step | Uses |
 |---|---|
-| Check this week's news; one article a month can cover important news (`max_news_per_month`) | Google News (no key) + `GEMINI_API_KEY` |
-| Research the topic: real questions, research papers, news, background | Google, Wikipedia (no key), OpenAlex (`OPENALEX_API_KEY`, free) |
+| News check: if an important story deserves the slot, swap the planned topic for it (at most `max_news_per_month`, default 1) | Google News (no key) + `GEMINI_API_KEY` |
+| Final check that the topic is not already on the site, before any AI quota is spent | `STRAPI_API_TOKEN` (or WordPress) |
+| Research: real questions, research papers, news, background | Google, Wikipedia (no key), OpenAlex (`OPENALEX_API_KEY`, free) |
 | Write the article | `GEMINI_API_KEY` |
 | Check it: SEO rules plus an AI editor score; rewrite up to 3 times if needed | `GEMINI_API_KEY` |
 | Add a cover photo and 2 images | `UNSPLASH_ACCESS_KEY` |
-| Upload it as a draft (or publish it) | `STRAPI_API_TOKEN` (or WordPress) |
-| Email you a link to review it | `RESEND_API_KEY` |
+| Upload as a draft or published, then ping search engines when it goes live | `STRAPI_API_TOKEN` (or WordPress) |
 
-Only Gemini and Unsplash are required. Without an OpenAlex key, articles just skip research papers. Without a CMS token, articles are just saved as files.
-Without Resend, it simply doesn't send emails. One article uses about 4 to 10 Gemini requests.
+If writing fails (for example Gemini is busy), the article is retried on the next daily runs, up to
+3 attempts. One article uses about 4 to 10 Gemini requests.
+
+Only Gemini and Unsplash are required. Without an OpenAlex key, articles skip research papers.
+Without a CMS, articles are just saved as files.
 
 ## Getting started
 
@@ -53,7 +70,8 @@ cd autonomous-seo-writer
 cp .env.example .env
 ```
 
-Open `.env` and paste your `GEMINI_API_KEY` and `UNSPLASH_ACCESS_KEY`.
+Open `.env` and paste your `GEMINI_API_KEY` and `UNSPLASH_ACCESS_KEY`. Add `STRAPI_API_TOKEN` if you
+publish to Strapi (it needs find, findOne, create and update on the blog collection, plus Upload).
 
 **3. Describe your business**
 
@@ -61,60 +79,115 @@ Open `.env` and paste your `GEMINI_API_KEY` and `UNSPLASH_ACCESS_KEY`.
 cp -r clients/_template clients/mybusiness
 ```
 
-Open `clients/mybusiness/config.yaml` and fill it in: your company, products, customers and website
-links. Every line is explained in the file. When you're done, set `enabled: true`.
+Open `clients/mybusiness/config.yaml` and fill it in: your company, products, customers, website and
+CMS details. Every line is explained in the file. When you're done, set `enabled: true`.
 
-**4. Start it**
+**4. Check and start it**
 
 ```bash
+docker compose run --rm writer python cli.py validate mybusiness   # checks keys, CMS token, existing posts
 docker compose up -d --build
 ```
 
-That's it. It now runs every day and writes articles on the planned days.
-Check it's running with `docker compose logs writer`.
+That's it. It now runs every day. Check it with `docker compose logs -f writer`.
 
 ## Where articles go
 
-Choose with `publish_to` in your config:
+`publish_to` in the config (or `PUBLISH_TO` in `.env`) picks the destination:
 
-- `files`: only saved, not published (the default, good for testing)
 - `strapi`: uploaded to your Strapi website
 - `wordpress`: posted to your WordPress website
+- `files`: saved only, not uploaded (good for testing)
 
-Uploads go in as **drafts** by default, so you can review before they go live. The setup for each
-is explained in the config file.
+Left empty, it uses whichever CMS is configured, or `files` if none is.
+Every article is also saved in `data/<client>/drafts/` as `.html` (preview), `.json` and `.jpg`.
 
-## See your articles
+### Draft or published
 
-Set `CLIENT=mybusiness` in `.env`, then run:
+Uploads land as **drafts** (you review them first) or **published** (live at once). Where this is set,
+highest priority first:
+
+1. The **Automatic publishing** switch on the dashboard (saved in `data/<client>/settings.json`)
+2. `PUBLISH_STATUS` in `.env`
+3. `strapi.status` / `wordpress.status` in `config.yaml`
+
+A change takes effect from the next scheduled run. Choosing the `.env` / config value again on the
+dashboard removes the override.
+
+## Dashboard
+
+The dashboard shows one business (`CLIENT` in `.env`). The screenshot above uses example data.
+
+**With Docker:**
 
 ```bash
 docker compose --profile web up -d
 ```
 
-Open http://127.0.0.1:8000 to see the monthly plan and every article, or to write one now.
+Open http://127.0.0.1:8000
 
-## Common settings (`.env`)
+**Without Docker:**
+
+```bash
+make start            # or: npm start  (http://127.0.0.1:8085, auto-reloads on code changes)
+CLIENT=mybusiness PORT=9000 make start
+```
+
+On the dashboard you can:
+
+- **See the content calendar**: every planned article with its date, status (planned, done, skipped,
+  failed, with the error), category and whether it's on the website.
+- **Publish a draft**: click **Publish** next to an uploaded draft, or **Open in Strapi/WordPress**
+  to edit it first. Posts already published in the CMS admin show as **Live**.
+- **Switch automatic publishing** between Draft and Published for the scheduler.
+- **Write an article now**, outside the schedule, and choose Draft, Published or Local only.
+  Topics already on the website are rejected before any AI quota is used.
+- **Read recent drafts** as they will appear.
+
+The dashboard has no login and is only reachable from your own machine. Don't expose it to the internet.
+
+## Settings (`.env`)
 
 | Setting | Example | Meaning |
 |---|---|---|
+| `GEMINI_API_KEY` | | Required. Writing and planning |
+| `UNSPLASH_ACCESS_KEY` | | Required. Images |
+| `OPENALEX_API_KEY` | | Optional. Research papers |
+| `STRAPI_API_TOKEN` | | Needed for Strapi |
+| `WP_USERNAME`, `WP_APP_PASSWORD` | | Needed for WordPress |
+| `PUBLISH_TO` | `strapi` | `strapi`, `wordpress` or `files`. Overrides `publish_to` for all businesses |
+| `PUBLISH_STATUS` | `draft` | `draft` or `published`. Overrides the config (the dashboard overrides this) |
 | `POSTS_PER_MONTH` | `8` | How many articles a month |
-| `PUBLISH_DAYS` | `tue,fri` | Which days to post |
-| `SCHEDULE_TIME` | `09:07` | What time it runs each day |
-| `PUBLISH_TO` | `files` | Overrides `publish_to` for all businesses |
-| `NOTIFY_TO` | `you@example.com` | Where to send email updates (needs a free Resend key) |
+| `PUBLISH_DAYS` | `tue,fri` | Which weekdays to post on |
+| `SCHEDULE_TIME` | `09:07` | What time the daily run happens |
+| `SCHEDULE_TZ` | `Asia/Kolkata` | Timezone of `SCHEDULE_TIME` (servers often run on UTC) |
+| `RUN_ON_START` | `1` | Docker: also run once when the container starts |
+| `CLIENT` | `mybusiness` | Which business the dashboard shows |
+| `GEMINI_MODELS` | | Advanced: Gemini models to try, in order |
 
 After changing `.env` or the config, run `docker compose up -d --force-recreate`.
 
-## Useful commands
+## Commands
+
+With Docker, prefix these with `docker compose run --rm writer`. Without Docker, use
+`./venv/bin/python` instead of `python`.
 
 ```bash
-docker compose logs -f writer      # see what it's doing
-docker compose down                # stop it
-git pull && docker compose up -d --build                         # update to the latest version
-docker compose run --rm writer python cli.py validate mybusiness # check your setup
-docker compose run --rm writer python cli.py run mybusiness      # write one article now
-docker compose run --rm writer python cli.py run-next mybusiness # test the full daily job now
+python cli.py validate mybusiness        # check keys, CMS token and existing posts
+python cli.py plan mybusiness            # show this month's plan (--new to re-plan)
+python cli.py run mybusiness             # write one article now (--keyword "..." for a topic, --dry-run)
+python cli.py run-next mybusiness        # run the full daily job now, with the next planned article moved to today
+python cli.py auto                       # the daily job itself, for every enabled business
+python cli.py push mybusiness <draft>    # upload a saved article (skipped if already on the site)
+python cli.py serve mybusiness           # dashboard (--port, --reload)
+python cli.py list                       # list businesses
+python cli.py add-client mybusiness      # create a new business from the template
+```
+
+```bash
+docker compose logs -f writer            # see what it's doing
+docker compose down                      # stop it
+git pull && docker compose up -d --build # update to the latest version
 ```
 
 ## Without Docker
@@ -122,13 +195,19 @@ docker compose run --rm writer python cli.py run-next mybusiness # test the full
 ```bash
 python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
 ./venv/bin/python cli.py validate mybusiness
-./venv/bin/python cli.py schedule on    # runs it daily
+./venv/bin/python cli.py schedule on     # run daily: launchd on macOS, cron on Linux (off / status too)
+make start                               # dashboard
+make test                                # run the tests
 ```
+
+`schedule on` registers the same single daily job (`cli.py auto`) at `SCHEDULE_TIME` in `SCHEDULE_TZ`.
+In Docker, `cli.py daemon` does this instead, so no cron is needed.
 
 ## Good to know
 
 - It never writes the same topic twice, and never uploads something already on your site.
 - The free Gemini plan is enough for about 2 articles a week. If it's busy, the article waits for the next day.
+- Only one daily run happens at a time; a second one started meanwhile exits straight away.
 - Your keys stay in `.env`, which is never uploaded to GitHub.
 
 ## License

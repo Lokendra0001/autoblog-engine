@@ -112,10 +112,10 @@ def publish_post(client, title, content, meta, focus_keyword, category, tags, fe
     raise Exception(f"WP publish failed {r.status_code}: {r.text[:300]}")
 
 
-def upload_article(client, data: dict, image_path: Path | None) -> dict:
+def upload_article(client, data: dict, image_path: Path | None, status: str | None = None) -> dict:
     """Post one exported article (see pipeline.build_export) to WordPress.
     Returns the same shape as strapi.upload_article: {"result": "uploaded"|"failed", ...}."""
-    status = "publish" if client.wordpress.status == "publish" else "draft"
+    status = "publish" if (status or client.wordpress.publish_status) == "published" else "draft"
     meta, keyword = data.get("meta_description", ""), data.get("focus_keyword", "")
     try:
         media_id = None
@@ -129,6 +129,22 @@ def upload_article(client, data: dict, image_path: Path | None) -> dict:
         return {"result": "failed", "reason": str(e)[:300]}
     return {"result": "uploaded", "documentId": str(post_id), "url": url, "image": bool(media_id),
             "status": "published" if status == "publish" else "draft"}
+
+
+def publish(client, post_id: str) -> dict:
+    """Publish an existing WordPress draft. Same result shape as strapi.publish."""
+    try:
+        r = _wp(requests.post, f"{client.wordpress.site_url}/wp-json/wp/v2/posts/{post_id}",
+                json={"status": "publish"}, auth=_auth(client), timeout=30)
+    except Exception as e:
+        return {"result": "failed", "reason": str(e)[:300]}
+    if r.status_code not in (200, 201):
+        return {"result": "failed", "reason": f"HTTP {r.status_code}: {r.text[:200]}"}
+    return {"result": "published", "url": r.json().get("link", "")}
+
+
+def admin_url(client, post_id: str) -> str:
+    return f"{client.wordpress.site_url.rstrip('/')}/wp-admin/post.php?post={post_id}&action=edit"
 
 
 def patch_content(client, post_id, content):

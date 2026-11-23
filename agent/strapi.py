@@ -94,8 +94,9 @@ def _upload_image(client, path: Path, alt: str) -> int | None:
         return None
 
 
-def upload_article(client, data: dict, image_path: Path | None) -> dict:
-    """Upload one exported article. Returns {"result": "uploaded"|"exists"|"failed", ...}."""
+def upload_article(client, data: dict, image_path: Path | None, status: str | None = None) -> dict:
+    """Upload one exported article as `status` ("draft"/"published", default: the configured one).
+    Returns {"result": "uploaded"|"exists"|"failed", ...}."""
     if not enabled(client):
         return {"result": "failed", "reason": "Strapi url/token not configured"}
     blogs = list_blogs(client)
@@ -117,7 +118,7 @@ def upload_article(client, data: dict, image_path: Path | None) -> dict:
         value = image_id if key == "image" else data.get(key)
         if value not in (None, "", []):
             fields[name] = ", ".join(value) if key == "tags" and isinstance(value, list) else value
-    status = "published" if client.strapi.status == "published" else "draft"
+    status = "published" if (status or client.strapi.publish_status) == "published" else "draft"
     try:
         r = requests.post(_coll(client), params={"status": status}, json={"data": fields},
                           headers=_auth(client), timeout=_TIMEOUT)
@@ -145,6 +146,38 @@ def set_cover(client, blog: dict, image_path: Path, alt: str) -> bool:
         return False
     print(f"[STRAPI] Cover image added to: {blog['title']}")
     return True
+
+
+def publish(client, document_id: str, slug: str) -> dict:
+    """Publish an existing draft (needs the token's `update` permission).
+    Returns {"result": "published", "url"} or {"result": "failed", "reason"}."""
+    if not enabled(client):
+        return {"result": "failed", "reason": "Strapi url/token not configured"}
+    try:  # Strapi v5: updating a document with ?status=published publishes it
+        r = requests.put(_coll(client, document_id), params={"status": "published"},
+                         json={"data": {client.strapi.field_map()["slug"]: slug}}, headers=_auth(client), timeout=_TIMEOUT)
+    except Exception as e:
+        return {"result": "failed", "reason": str(e)[:300]}
+    if r.status_code >= 400:
+        hint = " Give the API token the 'update' permission on the collection." if r.status_code == 403 else ""
+        return {"result": "failed", "reason": f"HTTP {r.status_code}: {r.text[:200]}{hint}"}
+    url = f"{client.brand.website.rstrip('/')}{client.strapi.blog_path}/{slug}"
+    print(f"[STRAPI] Published: {slug} -> {url}")
+    return {"result": "published", "url": url}
+
+
+def status_of(client, document_id: str) -> str | None:
+    """"published", "draft", or None if Strapi could not be read / the blog no longer exists."""
+    blogs = list_blogs(client)
+    return next((b["status"] for b in blogs or [] if b["documentId"] == document_id), None)
+
+
+def admin_url(client, document_id: str) -> str:
+    """Edit page of a blog in the Strapi admin."""
+    coll = client.strapi.collection
+    single = coll[:-1] if coll.endswith("s") else coll  # Strapi UID: api::<singular>.<singular>
+    return (f"{client.strapi.url.rstrip('/')}/admin/content-manager/collection-types/"
+            f"api::{single}.{single}/{document_id}")
 
 
 def check(client) -> tuple[bool, str]:

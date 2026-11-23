@@ -69,6 +69,14 @@ class UploadTests(unittest.TestCase):
             self.assertEqual(strapi.upload_article(_client(), ARTICLE, None)["result"], "failed")
         post.assert_not_called()
 
+    def test_status_override_publishes_one_article(self):
+        with mock.patch.object(strapi, "list_blogs", return_value=EXISTING), \
+             mock.patch.object(strapi.requests, "post",
+                               return_value=_resp(201, {"data": {"documentId": "new2"}})) as post:
+            res = strapi.upload_article(_client(), ARTICLE, None, status="published")
+        self.assertEqual(res["status"], "published")
+        self.assertEqual(post.call_args[1]["params"], {"status": "published"})
+
     def test_new_article_is_created_as_draft(self):
         with mock.patch.object(strapi, "list_blogs", return_value=EXISTING), \
              mock.patch.object(strapi.requests, "post",
@@ -118,6 +126,62 @@ class PipelineTests(unittest.TestCase):
                 pipeline.preview_article(_client(), "GFRP rebar for water tanks")
         research.assert_not_called()
         write.assert_not_called()
+
+
+
+class PublishDraftTests(unittest.TestCase):
+    """Dashboard "Publish" button: only our own drafts, never twice."""
+
+    def setUp(self):
+        import json, tempfile
+        from pathlib import Path
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.c = _client()
+        self.c.publish_to = "strapi"
+        p = mock.patch.object(type(self.c), "drafts_dir", new_callable=mock.PropertyMock, return_value=Path(self.tmp.name))
+        p.start(); self.addCleanup(p.stop)
+        self.json = json
+        self._save("a.html", {"result": "uploaded", "documentId": "doc1", "status": "draft"})
+        self._save("b.html", {"result": "exists", "documentId": "other", "status": "draft"})
+
+    def _save(self, name, upload):
+        from pathlib import Path
+        (Path(self.tmp.name) / name).with_suffix(".json").write_text(self.json.dumps(
+            {**ARTICLE, "upload": upload}), encoding="utf-8")
+
+    def test_publishes_our_draft_and_records_it(self):
+        with mock.patch.object(strapi, "status_of", return_value="draft"), \
+             mock.patch.object(strapi.requests, "put", return_value=_resp(200, {"data": {}})) as put, \
+             mock.patch.object(pipeline, "_went_live") as live:
+            res = pipeline.publish_saved(self.c, "a.html")
+        self.assertEqual(res["result"], "published")
+        self.assertEqual(put.call_args[1]["params"], {"status": "published"})
+        self.assertIn("/doc1", put.call_args[0][0])
+        live.assert_called_once()
+        self.assertEqual(pipeline.uploaded_draft(self.c, "a.html")["status"], "published")
+        self.assertEqual(pipeline.publish_saved(self.c, "a.html")["reason"], "already published")
+
+    def test_already_published_in_admin_is_not_published_again(self):
+        with mock.patch.object(strapi, "status_of", return_value="published"), \
+             mock.patch.object(strapi.requests, "put") as put, mock.patch.object(pipeline, "_went_live"):
+            self.assertEqual(pipeline.publish_saved(self.c, "a.html")["result"], "published")
+        put.assert_not_called()
+
+    def test_refuses_documents_that_are_not_our_upload(self):
+        self.assertIsNone(pipeline.uploaded_draft(self.c, "b.html"))  # topic was already on the site
+        self.assertIsNone(pipeline.uploaded_draft(self.c, "../a.html"))
+        with mock.patch.object(strapi.requests, "put") as put:
+            self.assertEqual(pipeline.publish_saved(self.c, "b.html")["result"], "failed")
+        put.assert_not_called()
+
+    def test_strapi_error_is_reported(self):
+        with mock.patch.object(strapi, "status_of", return_value="draft"), \
+             mock.patch.object(strapi.requests, "put", return_value=_resp(403, "forbidden")):
+            res = pipeline.publish_saved(self.c, "a.html")
+        self.assertEqual(res["result"], "failed")
+        self.assertIn("update", res["reason"])
+        self.assertEqual(pipeline.uploaded_draft(self.c, "a.html")["status"], "draft")
 
 
 if __name__ == "__main__":

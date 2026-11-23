@@ -1,0 +1,10 @@
+{
+  "name": "autoblog-engine",
+  "version": "1.0.0",
+  "description": "Autonomous SEO Writer & Dashboard",
+  "scripts": {
+    "start": "./start.sh",
+    "dev": "./start.sh",
+    "test": "./venv/bin/python -m unittest discover tests"
+  }
+}

@@ -16,7 +16,7 @@ publish_to: strapi         # strapi | wordpress | files (PUBLISH_TO in .env over
 strapi:
   url: "https://api.bhandaritechfab.com"
   token: "${STRAPI_API_TOKEN}"   # set in .env; leave empty to only save previews
-  status: "draft"                # "draft" = review in the admin first; "published" = live immediately
+  status: "draft"                # "draft" = review in the admin first; "published" = live immediately (PUBLISH_STATUS in .env overrides)
   blog_path: "/blogs"
 
 wordpress:

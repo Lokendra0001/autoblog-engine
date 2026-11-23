@@ -10,6 +10,7 @@ use this for secrets (WP application passwords) so they never sit in plain text.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass, field, fields
@@ -46,7 +47,11 @@ class WordPress:
     site_url: str = ""
     username: str = ""
     app_password: str = ""
-    status: str = "publish"        # "publish" (live at once) or "draft"
+    status: str = "publish"        # "publish" (live at once) or "draft"; PUBLISH_STATUS in .env overrides
+
+    @property
+    def publish_status(self) -> str:
+        return "published" if self.status in ("publish", "published") else "draft"
 
 
 # Article values the app can send to Strapi -> the field name in your Strapi collection.
@@ -63,10 +68,14 @@ class Strapi:
     """Strapi v5 CMS target (optional)."""
     url: str = ""                  # e.g. https://cms.example.com
     token: str = ""                # API token: find/create (+ update) on the collection, Upload upload
-    status: str = "draft"          # "draft" (review in admin, then publish) or "published"
+    status: str = "draft"          # "draft" (review in admin, then publish) or "published"; PUBLISH_STATUS overrides
     collection: str = "blogs"      # the collection's API name (plural), as in /api/<collection>
     blog_path: str = "/blogs"      # public URL of a post: brand.website + blog_path + "/" + slug
     fields: dict = field(default_factory=dict)  # overrides for STRAPI_DEFAULT_FIELDS
+
+    @property
+    def publish_status(self) -> str:
+        return "published" if self.status in ("publish", "published") else "draft"
 
     def field_map(self) -> dict:
         """Our value name -> Strapi field name, only for values that are sent."""
@@ -172,6 +181,7 @@ class ClientConfig:
 
     # Filled in by the loader, not from YAML:
     config_dir: Path = field(default=None, repr=False)
+    publish_status_default: str = field(default="", repr=False)  # .env / config.yaml value, before the dashboard setting
 
     @property
     def destination(self) -> str:
@@ -183,6 +193,15 @@ class ClientConfig:
         if self.wordpress.site_url and self.wordpress.app_password:
             return "wordpress"
         return "files"
+
+    @property
+    def publish_status(self) -> str:
+        """Default status of uploaded articles: "draft" or "published" ("" when saved as files only)."""
+        if self.destination == "strapi":
+            return self.strapi.publish_status
+        if self.destination == "wordpress":
+            return self.wordpress.publish_status
+        return ""
 
     @property
     def drafts_dir(self) -> Path:
@@ -220,20 +239,69 @@ def load_client(client_id: str) -> ClientConfig:
     client = _build(ClientConfig, raw)
     client.config_dir = cfg_path.parent
     _apply_env_overrides(client)
+    client.publish_status_default = client.publish_status
+    if (st := load_settings(client_id).get("publish_status")) in PUBLISH_STATUSES:
+        set_publish_status(client, st)
     return client
+
+
+# ── Settings changed from the web dashboard ──────────────────────────────────
+# Stored in data/<client>/settings.json, which the web server and the scheduler share, so the next
+# scheduled run uses them. They override .env and config.yaml.
+
+def _settings_path(client_id: str) -> Path:
+    return DATA_DIR / client_id / "settings.json"
+
+
+def load_settings(client_id: str) -> dict:
+    try:
+        data = json.loads(_settings_path(client_id).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def set_publish_status(client, status: str) -> None:
+    """Apply "draft" / "published" to whichever CMS the client uses (in memory only)."""
+    client.strapi.status = status
+    client.wordpress.status = "publish" if status == "published" else "draft"
+
+
+def save_publish_status(client, status: str) -> None:
+    """Dashboard: make `status` the status every scheduled upload uses from now on. Choosing the
+    .env / config.yaml value again removes the override, so .env is back in charge."""
+    if status not in PUBLISH_STATUSES:
+        raise ValueError(f"status must be one of {PUBLISH_STATUSES}, got '{status}'")
+    settings = load_settings(client.id)
+    if status == client.publish_status_default:
+        settings.pop("publish_status", None)
+    else:
+        settings["publish_status"] = status
+    path = _settings_path(client.id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    tmp.replace(path)  # atomic: the scheduler never reads a half-written file
+    set_publish_status(client, status)
 
 
 _DAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
 DESTINATIONS = ("strapi", "wordpress", "files")
+PUBLISH_STATUSES = ("draft", "published")
 
 
 def _apply_env_overrides(client) -> None:
-    """PUBLISH_TO, POSTS_PER_MONTH and PUBLISH_DAYS in .env override the client's config."""
+    """PUBLISH_TO, PUBLISH_STATUS, POSTS_PER_MONTH and PUBLISH_DAYS in .env override the client's config."""
     client.publish_to = (os.getenv("PUBLISH_TO", "").strip() or client.publish_to or "").lower()
     if client.publish_to and client.publish_to not in DESTINATIONS:
         raise ValueError(f"publish_to / PUBLISH_TO must be one of {', '.join(DESTINATIONS)}, got '{client.publish_to}'")
+    if (st := os.getenv("PUBLISH_STATUS", "").strip().lower()):
+        st = "published" if st == "publish" else st
+        if st not in PUBLISH_STATUSES:
+            raise ValueError(f"PUBLISH_STATUS must be 'draft' or 'published', got '{st}'")
+        set_publish_status(client, st)
     if (n := os.getenv("POSTS_PER_MONTH", "").strip()):
         if not n.isdigit() or not 1 <= int(n) <= 31:
             raise ValueError(f"POSTS_PER_MONTH must be a number from 1 to 31, got '{n}'")

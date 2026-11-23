@@ -192,9 +192,10 @@ def site_titles(client) -> list[str]:
     return [b["title"] for b in (strapi.list_blogs(client) or [])]
 
 
-def upload_saved(client, path) -> dict:
+def upload_saved(client, path, status: str | None = None) -> dict:
     """Upload a saved article (its .json export + cover file) to the client's destination (Strapi or
-    WordPress) and record the result in the .json. Only call when client.destination != "files"."""
+    WordPress) and record the result in the .json. Only call when client.destination != "files".
+    `status` ("draft"/"published") overrides the configured default for this one article."""
     json_path = path.with_suffix(".json")
     data = json.loads(json_path.read_text(encoding="utf-8"))
     if not data.get("imageFile") and data.get("image"):  # older drafts: fetch the cover now
@@ -202,23 +203,69 @@ def upload_saved(client, path) -> dict:
     image = (json_path.parent / data["imageFile"]) if data.get("imageFile") else None
     dest = client.destination
     upload = strapi.upload_article if dest == "strapi" else publisher.upload_article
-    res = {**upload(client, data, image), "to": dest}
+    res = {**upload(client, data, image, status=status), "to": dest}
     data.pop("strapi", None)  # older exports kept the result under this name
     data["upload"] = res
     json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     if res["result"] == "failed":
         print(f"[WARN] Upload to {dest} failed: {res['reason']}")
     elif res["result"] == "uploaded" and res["status"] == "published":
-        ClientState(client).log_published({"ts": datetime.now(timezone.utc).isoformat(), "title": data["title"],
-                                           "url": res["url"], "category": data["category"], "to": dest})
-        try:
-            indexer.ping_all(client, res["url"])
-        except Exception as e:
-            print(f"[WARN] Indexing ping failed: {e}")
+        _went_live(client, data, res["url"])
     return res
 
 
-def preview_article(client, keyword, brief="", publish_date: str | None = None, upload: bool = True):
+def _went_live(client, data: dict, url: str) -> None:
+    """Record a newly live article and ask search engines to index it."""
+    ClientState(client).log_published({"ts": datetime.now(timezone.utc).isoformat(), "title": data["title"],
+                                       "url": url, "category": data["category"], "to": client.destination})
+    try:
+        indexer.ping_all(client, url)
+    except Exception as e:
+        print(f"[WARN] Indexing ping failed: {e}")
+
+
+def uploaded_draft(client, draft_name: str) -> dict | None:
+    """The CMS upload of a saved article if it is our own upload, else None.
+    Returns the .json's "upload" record: {"result": "uploaded", "documentId", "status", ...}."""
+    if not draft_name or "/" in draft_name or "\\" in draft_name:
+        return None
+    path = (client.drafts_dir / draft_name).with_suffix(".json")
+    try:
+        up = json.loads(path.read_text(encoding="utf-8")).get("upload") or {}
+    except (OSError, ValueError):
+        return None
+    # "exists" means the topic was already on the site: that document is not ours to publish.
+    return up if up.get("result") == "uploaded" and up.get("documentId") else None
+
+
+def publish_saved(client, draft_name: str) -> dict:
+    """Publish an article that was uploaded as a draft. Returns {"result": "published", "url"} or
+    {"result": "failed", "reason"}; the .json export is updated on success."""
+    up = uploaded_draft(client, draft_name)
+    if not up:
+        return {"result": "failed", "reason": "this article was not uploaded to the CMS by this app"}
+    if up.get("status") == "published":
+        return {"result": "failed", "reason": "already published"}
+    path = (client.drafts_dir / draft_name).with_suffix(".json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if client.destination == "strapi":
+        if strapi.status_of(client, up["documentId"]) == "published":  # published in the admin meanwhile
+            res = {"result": "published", "url": f"{client.brand.website.rstrip('/')}{client.strapi.blog_path}/{data['slug']}"}
+        else:
+            res = strapi.publish(client, up["documentId"], data["slug"])
+    elif client.destination == "wordpress":
+        res = publisher.publish(client, up["documentId"])
+    else:
+        return {"result": "failed", "reason": "articles are saved as files only"}
+    if res["result"] == "published":
+        data["upload"] = {**up, "status": "published", "url": res["url"] or up.get("url", "")}
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        _went_live(client, data, data["upload"]["url"])
+    return res
+
+
+def preview_article(client, keyword, brief="", publish_date: str | None = None, upload: bool = True,
+                    status: str | None = None):
     """Research + write one article, save it to data/<client>/drafts/ and (unless the destination is
     "files" or upload=False) upload it to Strapi or WordPress.
 
@@ -241,7 +288,7 @@ def preview_article(client, keyword, brief="", publish_date: str | None = None, 
     print(f"[SAVED] {path}")
     result = {"path": path, "title": data["title"], "data": data}
     if upload and client.destination != "files":
-        result["upload"] = upload_saved(client, path)
+        result["upload"] = upload_saved(client, path, status=status)
     return result
 
 

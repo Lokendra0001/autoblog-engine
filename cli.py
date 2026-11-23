@@ -13,7 +13,6 @@ Usage:
   python cli.py run-next <client>            Same daily job, with the next planned article moved to today
   python cli.py push <client> <draft-name>   Upload a saved article to Strapi (skips if already there)
   python cli.py schedule on|off|status       Run `auto` daily at SCHEDULE_TIME (launchd on macOS, cron on Linux)
-  python cli.py notify-test                  Send a test notification email
   python cli.py daemon                       Built-in daily scheduler (for Docker; no cron needed)
 """
 
@@ -65,7 +64,7 @@ def cmd_validate(args):
     print("  [OK]   UNSPLASH_ACCESS_KEY set" if os.getenv("UNSPLASH_ACCESS_KEY")
           else "  [WARN] UNSPLASH_ACCESS_KEY missing (articles will have no images)")
 
-    from agent import notify, strapi
+    from agent import strapi
     where = {"strapi": "Strapi", "wordpress": "WordPress",
              "files": f"saved only, in data/{c.id}/drafts/ (not published)"}[c.destination]
     print(f"  [OK]   Articles go to: {where}")
@@ -75,8 +74,6 @@ def cmd_validate(args):
     if c.destination == "wordpress" and not (c.wordpress.site_url and c.wordpress.app_password):
         print("  [FAIL] publish_to is wordpress but wordpress.site_url / app_password is missing")
         ok = False
-    print("  [OK]   Email notifications configured" if notify.configured()
-          else "  [WARN] Email notifications off (set RESEND_API_KEY, NOTIFY_FROM, NOTIFY_TO)")
     if c.strapi.url:
         good, msg = strapi.check(c)
         print(f"  [{'OK' if good else 'WARN'}]   Strapi ({c.strapi.url}, upload as {c.strapi.status}): {msg}")
@@ -162,7 +159,7 @@ def cmd_auto(_):
     """Daily job for every enabled client. One run at a time (a second one exits immediately)."""
     import traceback
     from datetime import datetime
-    from agent import notify, planner
+    from agent import planner
     LOG.parent.mkdir(exist_ok=True)
     _trim_log()
     lock = _run_lock()
@@ -175,7 +172,6 @@ def cmd_auto(_):
         except Exception:
             err = traceback.format_exc()
             print(f"[ERROR] [{cid}] auto run failed:\n{err}")
-            notify.crash(f"client '{cid}'", err)
 
 
 def cmd_run_next(args):
@@ -249,17 +245,6 @@ def cmd_schedule(args):
     print(f"Schedule: {'ON, ' + when if on else 'OFF'}" + (f". Log: {LOG}" if on else ""))
 
 
-def cmd_notify_test(_):
-    """Send a test email to check the RESEND_API_KEY / NOTIFY_FROM / NOTIFY_TO settings."""
-    from agent import notify
-    if not notify.configured():
-        sys.exit("Set RESEND_API_KEY, NOTIFY_FROM and NOTIFY_TO in .env first.")
-    ok = notify.send("[AutoBlog Engine] Test email",
-                     "<p>Notifications are working. You will get an email when an article is drafted or "
-                     "published, when the monthly plan is created, and whenever something needs attention.</p>")
-    sys.exit(0 if ok else 1)
-
-
 def cmd_push(args):
     """Upload a saved article (data/<client>/drafts/<name>) to Strapi or WordPress."""
     c = config.load_client(args.client)
@@ -275,7 +260,7 @@ def cmd_push(args):
 
 def cmd_serve(args):
     from agent import web
-    web.serve(config.load_client(args.client), port=args.port, host=args.host)
+    web.serve(config.load_client(args.client), port=args.port, host=args.host, reload=getattr(args, "reload", False))
 
 
 HEARTBEAT = ROOT / "data" / ".heartbeat"
@@ -354,7 +339,6 @@ def main():
     sc = sub.add_parser("schedule"); sc.add_argument("action", choices=["on", "off", "status"])
     sc.set_defaults(func=cmd_schedule)
 
-    sub.add_parser("notify-test").set_defaults(func=cmd_notify_test)
 
     pu = sub.add_parser("push"); pu.add_argument("client"); pu.add_argument("name"); pu.set_defaults(func=cmd_push)
 
@@ -362,6 +346,7 @@ def main():
 
     sv = sub.add_parser("serve"); sv.add_argument("client"); sv.add_argument("--port", type=int, default=8000)
     sv.add_argument("--host", default="127.0.0.1", help="0.0.0.0 inside Docker")
+    sv.add_argument("--reload", action="store_true", help="Auto-restart server on file change")
     sv.set_defaults(func=cmd_serve)
 
     a = sub.add_parser("add-client"); a.add_argument("id"); a.set_defaults(func=cmd_add_client)
