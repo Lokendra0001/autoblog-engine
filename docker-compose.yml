@@ -2,10 +2,11 @@
 # Logs:    docker compose logs -f writer
 # Web UI:  docker compose --profile web up -d   (needs CLIENT=<id> in .env), then open http://127.0.0.1:8000
 services:
+  # 1. Background daemon: runs daily autonomous scheduling, research & automatic publishing
   writer:
     build: .
-    image: autoblog-engine
-    container_name: autoblog-engine
+    image: ${CLIENT:-bhandari}-autoblog
+    container_name: ${CLIENT:-bhandari}-autoblog-scheduler
     restart: unless-stopped
     init: true
     env_file: .env
@@ -19,10 +20,10 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
-  # Web dashboard (preview articles, see the plan, trigger on demand). Runs automatically on port 8000.
+  # 2. Web UI dashboard: live calendar, article previews, manual triggers & settings on port 8000
   web:
-    image: autoblog-engine
-    container_name: autoblog-engine-web
+    image: ${CLIENT:-bhandari}-autoblog
+    container_name: ${CLIENT:-bhandari}-autoblog-dashboard
     restart: unless-stopped
     init: true
     env_file: .env
