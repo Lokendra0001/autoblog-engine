@@ -85,6 +85,15 @@ writing_notes: |
   - Ground articles in Indian conditions: IS/IRC codes, coastal and monsoon exposure, Indian infrastructure.
   - Cite research findings as "a 2024 bond-behaviour study found...", never by invented figures.
 
+# Photo direction for the article images (the writer chooses Unsplash searches from this).
+image_notes: |
+  - Show modern construction with reinforcement: rebar cages, concrete slabs, bridge decks, marine and
+    coastal structures, tunnels, engineers and workers on site.
+  - Never rusty, corroded, damaged or abandoned metal: GFRP is sold as the corrosion-free choice.
+  - No steel mills, welding sparks or scrap yards.
+# Stock photos whose description contains one of these words are never used.
+image_avoid: [rust, rusty, rusted, corroded, corrosion, abandoned, scrap, ruins, decay]
+
 cta:
   type: "contact"
   contact_url: "https://www.bhandaritechfab.com/contact"

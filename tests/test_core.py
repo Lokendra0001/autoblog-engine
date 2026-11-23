@@ -174,7 +174,7 @@ class HtmlTests(unittest.TestCase):
                 "date": "2026-11-24", "image": "", "imageSource": "",
                 "content": '<p>x</p><script type="application/ld+json">{}</script>',
                 "meta_description": "m", "focus_keyword": "k"}
-        page = pipeline._preview_html(_client(), data)
+        page = pipeline.preview_page(_client(), data)
         payload = re.search(r'<script id="data" type="application/json">(.*?)</script>', page, re.S).group(1)
         self.assertEqual(json.loads(payload)["content"], data["content"])
 

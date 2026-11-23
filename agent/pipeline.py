@@ -53,8 +53,8 @@ def _fill_images(content: str, resolve, keyword: str = "") -> str:
     return _PLACEHOLDER.sub("", content)
 
 
-def _hotlink(query):
-    url, credit, _ = images.fetch_stock_image(query)
+def _hotlink(query, avoid=()):
+    url, credit, _ = images.fetch_stock_image(query, avoid)
     return url, credit
 
 
@@ -78,8 +78,9 @@ def _download_cover(client, url: str, name: str) -> str:
 def build_export(client, article: writer.Article, publish_date: str) -> dict:
     """The article as the website's blog fields (+ SEO extras), with images resolved."""
     print("[IMAGE] Fetching images from Unsplash")
-    content = _fill_images(article.content, _hotlink, article.focus_keyword)
-    image, credit_html, credit_text = images.fetch_stock_image(article.featured_query or article.focus_keyword)
+    avoid = client.image_avoid
+    content = _fill_images(article.content, lambda q: _hotlink(q, avoid), article.focus_keyword)
+    image, credit_html, credit_text = images.fetch_stock_image(article.featured_query or article.focus_keyword, avoid)
     image_file = _download_cover(client, image, slugify(article.title)) if image else ""
     if credit_html:  # Unsplash asks for visible attribution
         content += f'\n<p style="font-size:13px;color:#6b7280;">Cover image: {credit_html}</p>'
@@ -103,13 +104,56 @@ def build_export(client, article: writer.Article, publish_date: str) -> dict:
 
 
 _PREVIEW_CSS = """
-*{box-sizing:border-box} body{margin:0;font-family:'DM Sans',system-ui,sans-serif;color:#4b5563;background:#fff}
-.bar{position:sticky;top:0;z-index:10;background:#0f172a;color:#e2e8f0;font-size:13px;padding:10px 16px}
-.bar details>summary{cursor:pointer;font-weight:600;color:#fff}
-.bar .grid{display:grid;grid-template-columns:140px 1fr auto;gap:6px 12px;align-items:center;margin-top:10px;max-width:1100px}
-.bar .k{color:#94a3b8} .bar .v{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#fff}
-.bar button{background:#facc15;color:#0f172a;border:0;border-radius:6px;padding:4px 10px;font-weight:600;cursor:pointer;font-size:12px}
-.bar .note{color:#94a3b8;margin-top:8px}
+*{box-sizing:border-box;margin:0;padding:0} body{font-family:'DM Sans',system-ui,sans-serif;color:#4b5563;background:#fff}
+button{font:inherit;cursor:pointer}
+/* Admin panel above the article: what to paste into the CMS, SEO checks and the editor's review */
+.tb{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:16px;height:56px;padding:0 24px;
+ background:var(--deep);color:#fff;border-top:4px solid var(--primary)}
+.tb a.back{display:inline-flex;align-items:center;gap:8px;color:#cbd5e1;text-decoration:none;font-size:13px;font-weight:500}
+.tb a.back:hover{color:#fff} .tb .sep{width:1px;height:22px;background:rgba(255,255,255,.18)}
+.tb .lbl{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}
+.tb .tt{flex:1;min-width:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tb .acts{display:flex;gap:8px}
+.b{height:34px;padding:0 14px;font-size:13px;font-weight:600;border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff}
+.b:hover{background:rgba(255,255,255,.1)} .b.pri{background:var(--accent);border-color:var(--accent);color:var(--deep)}
+.b.pri:hover{filter:brightness(1.05)}
+.adm{background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:24px}
+.adm[hidden]{display:none}
+.adm-in{max-width:1400px;margin:0 auto;display:grid;gap:20px;grid-template-columns:minmax(0,1fr)}
+@media(min-width:1100px){.adm-in{grid-template-columns:minmax(0,1.6fr) minmax(300px,1fr)}}
+.card{background:#fff;border:1px solid #e2e8f0}
+.card h2{display:flex;align-items:center;justify-content:space-between;gap:12px;height:48px;padding:0 18px;
+ border-bottom:1px solid #e2e8f0;font-size:14px;font-weight:700;color:#0f172a}
+.card h2 small{font-size:12px;font-weight:500;color:#64748b}
+.side{display:grid;gap:20px;align-content:start}
+.f{display:grid;grid-template-columns:150px minmax(0,1fr) auto;gap:4px 16px;align-items:center;padding:11px 18px;border-top:1px solid #f1f5f9}
+.f:first-of-type{border-top:0}
+.f .k{font-size:12px;font-weight:600;color:#64748b}
+.f .v{font-size:13.5px;color:#0f172a;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+.f .v.mono{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+.cp{height:28px;padding:0 12px;font-size:12px;font-weight:600;border:1px solid #cbd5e1;background:#fff;color:#0f172a;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center}
+.cp:hover{border-color:var(--primary);color:var(--primary)} .cp.done{background:#f0fdf4;border-color:#86efac;color:#15803d}
+.cover{display:grid;grid-template-columns:120px minmax(0,1fr);gap:14px;align-items:center;padding:14px 18px;border-top:1px solid #f1f5f9}
+.cover img{width:120px;height:72px;object-fit:cover;background:#f1f5f9}
+.cover p{font-size:12.5px;color:#64748b;margin-bottom:8px;overflow-wrap:anywhere}
+.chk{list-style:none;padding:6px 0}
+.chk li{display:grid;grid-template-columns:22px 1fr auto;gap:10px;align-items:center;padding:8px 18px;font-size:13px;color:#334155}
+.chk li b{font-weight:600;color:#0f172a;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.chk i{width:18px;height:18px;display:grid;place-items:center;font-style:normal;font-size:11px;font-weight:700;color:#fff;background:#15803d}
+.chk li.no i{background:#b45309}
+.score{display:flex;align-items:baseline;gap:6px;padding:16px 18px 6px;font-size:32px;font-weight:800;color:#0f172a}
+.score small{font-size:13px;font-weight:500;color:#64748b}
+.score.lo{color:#b45309}
+.notes{padding:6px 18px 16px 36px;font-size:12.5px;line-height:1.55;color:#475569}
+.notes li{margin-top:6px}
+.tags{display:flex;flex-wrap:wrap;gap:6px;padding:0 18px 16px}
+.tags span{font-size:12px;padding:3px 9px;background:#f1f5f9;color:#334155}
+@media(max-width:720px){
+ .tb{padding:0 16px;gap:10px} .tb .lbl,.tb .sep,.tb .tt{display:none} .tb .acts{margin-left:auto}
+ .adm{padding:16px}
+ .f{grid-template-columns:minmax(0,1fr) auto;padding:10px 14px} .f .k{grid-column:1/-1}
+}
+/* The article, styled like the website's blog page */
 .wrap{max-width:1200px;margin:0 auto;padding:40px 16px 80px}
 .cat{display:inline-block;border:1px solid #e2e8f0;border-radius:999px;padding:8px 16px;font-size:12px;font-weight:600;
  text-transform:uppercase;letter-spacing:.05em;color:#014ca9;margin-bottom:20px}
@@ -125,50 +169,103 @@ h1.t{font-size:clamp(2.2rem,5vw,3.6rem);line-height:1.1;color:#0f172a;margin:0 0
 """
 
 
-def _preview_html(client, data: dict) -> str:
-    fields = [("Title", "title"), ("Slug", "slug"), ("Category", "category"), ("Read time", "readTime"),
-              ("Date", "date"), ("Image URL", "image"), ("Image source", "imageSource"),
-              ("Content (HTML)", "content"), ("Meta description", "meta_description"),
-              ("Focus keyword", "focus_keyword")]
+def _seo_checks(data: dict) -> list[tuple[bool, str, str]]:
+    """(passed, label, value) for the checks an SEO plugin will flag first."""
+    title, meta, kw = data["title"], data["meta_description"], data["focus_keyword"]
+    norm = lambda t: " ".join(re.findall(r"[a-z0-9]+", t.lower()))  # noqa: E731
+    return [
+        (30 <= len(title) <= 60, "Title length (30-60)", f"{len(title)}"),
+        (norm(title).startswith(norm(kw)), "Title starts with keyword", "yes" if norm(title).startswith(norm(kw)) else "no"),
+        (120 <= len(meta) <= 160, "Meta description (120-160)", f"{len(meta)}"),
+        (norm(kw) in norm(meta), "Keyword in meta description", "yes" if norm(kw) in norm(meta) else "no"),
+        (bool(data.get("image")), "Cover image", "found" if data.get("image") else "missing"),
+    ]
+
+
+def preview_page(client, data: dict) -> str:
+    """The draft's preview: admin panel (fields, SEO check, review) above the article as the site shows it."""
+    fields = [("Title", "title"), ("Slug", "slug"), ("Category", "category"), ("Meta description", "meta_description"),
+              ("Focus keyword", "focus_keyword"), ("Read time", "readTime"), ("Date", "date"),
+              ("Content (HTML)", "content"), ("Image URL", "image"), ("Image source", "imageSource")]
     rows = "".join(
-        f'<div class="k">{label}</div><div class="v">{html.escape(writer.text_of(data[key])[:140])}</div>'
-        f'<button data-k="{key}">Copy</button>' for label, key in fields)
+        f'<div class="f"><div class="k">{label}</div>'
+        f'<div class="v{" mono" if key in ("slug", "image", "content") else ""}">{html.escape(writer.text_of(str(data.get(key) or ""))[:220]) or "—"}</div>'
+        f'<button class="cp" type="button" data-k="{key}">Copy</button></div>'
+        for label, key in fields)
+    cover = ""
+    if data.get("image"):
+        f = html.escape(data.get("imageFile") or "")
+        dl = (f'<a class="cp" href="{f}" download="{f}" title="{f}">Download cover image</a>' if f
+              else '<p>No cover file saved; use the Image URL above.</p>')
+        cover = (f'<div class="cover"><img src="{html.escape(data["image"])}" alt="">'
+                 f'<div><p>Upload this file as the cover in the admin; its name contains the keyword.</p>{dl}</div></div>')
+    checks = "".join(f'<li class="{"" if ok else "no"}"><i>{"✓" if ok else "!"}</i><span>{label}</span><b>{value}</b></li>'
+                     for ok, label, value in _seo_checks(data))
+    review = data.get("review") or {}
+    score = review.get("score")
+    notes = "".join(f"<li>{html.escape(n)}</li>" for n in (review.get("notes") or [])[:6])
+    review_card = (
+        '<section class="card"><h2>Editor review<small>AI senior editor</small></h2>'
+        f'<div class="score{" lo" if (score or 0) < 8 else ""}">{score}<small>/ 10</small></div>'
+        + (f'<ol class="notes">{notes}</ol>' if notes else '<p class="notes">No open points.</p>')
+        + '</section>') if score is not None else ""
+    tags = "".join(f"<span>{html.escape(t)}</span>" for t in data.get("tags") or [])
+    p = client.brand.palette
     # JSON inside <script> must not contain "</" (it would close the tag early).
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     hero = f'<img class="hero" src="{data["image"]}" alt="{html.escape(data["title"])}">' if data["image"] else ""
-    if data.get("imageFile"):  # relative link: works from disk and from the local web page
-        f = html.escape(data["imageFile"])
-        rows += (f'<div class="k">Cover image file</div><div class="v">{f}</div>'
-                 f'<a href="{f}" download="{f}"><button type="button">Download</button></a>')
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(data["title"])}</title>
 <meta name="description" content="{html.escape(data["meta_description"])}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>{_PREVIEW_CSS}</style></head><body>
-<div class="bar"><details open><summary>Blog fields for the {html.escape(client.brand.name)} admin (click to hide)</summary>
-<div class="grid">{rows}</div>
-<div class="note">Image: click Download next to "Cover image file" and upload that file in the admin (its name contains the keyword). Paste "Content (HTML)" into the content field.</div>
-</details></div>
-<div class="wrap">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>:root{{--deep:{p.get("deep", "#0f172a")};--primary:{p.get("primary", "#014ca9")};--accent:{p.get("accent", "#facc15")}}}
+{_PREVIEW_CSS}</style></head><body>
+<header class="tb">
+  <a class="back" href="/" id="back" hidden>&larr; Dashboard</a><span class="sep" id="back-sep" hidden></span>
+  <span class="lbl">Article preview</span>
+  <span class="tt">{html.escape(data["title"])}</span>
+  <div class="acts">
+    <button class="b" type="button" id="toggle" aria-expanded="true" aria-controls="adm">Hide details</button>
+    <button class="b pri cp-main" type="button" data-k="content">Copy content HTML</button>
+  </div>
+</header>
+<section class="adm" id="adm" aria-label="Blog fields for the {html.escape(client.brand.name)} admin">
+  <div class="adm-in">
+    <section class="card"><h2>Blog fields<small>Copy into the {html.escape(client.brand.name)} admin</small></h2>
+      {rows}{cover}
+    </section>
+    <div class="side">
+      <section class="card"><h2>SEO check</h2><ul class="chk">{checks}</ul>
+        {f'<div class="tags">{tags}</div>' if tags else ""}</section>
+      {review_card}
+    </div>
+  </div>
+</section>
+<article class="wrap">
 <div class="cat">{html.escape(data["category"])}</div>
 <h1 class="t">{html.escape(data["title"])}</h1>
 <div class="info"><span>{data["date"]}</span><span>{data["readTime"]}</span></div>
 {hero}
 <div class="c">{data["content"]}</div>
-</div>
+</article>
 <script id="data" type="application/json">{payload}</script>
 <script>
 const DATA = JSON.parse(document.getElementById("data").textContent);
-document.querySelectorAll(".bar button").forEach(b => b.onclick = async () => {{
+if (location.protocol.startsWith("http")) {{ document.getElementById("back").hidden = false; document.getElementById("back-sep").hidden = false; }}
+document.querySelectorAll("button[data-k]").forEach(b => b.onclick = async () => {{
   const text = String(DATA[b.dataset.k] ?? "");
   try {{ await navigator.clipboard.writeText(text); }}
   catch (e) {{ const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t);
                t.select(); document.execCommand("copy"); t.remove(); }}
-  const old = b.textContent; b.textContent = "Copied"; setTimeout(() => b.textContent = old, 1200);
+  const old = b.textContent; b.textContent = "Copied"; b.classList.add("done");
+  setTimeout(() => {{ b.textContent = old; b.classList.remove("done"); }}, 1200);
 }});
+const adm = document.getElementById("adm"), tg = document.getElementById("toggle");
+tg.onclick = () => {{ adm.hidden = !adm.hidden; tg.setAttribute("aria-expanded", String(!adm.hidden));
+                     tg.textContent = adm.hidden ? "Show details" : "Hide details"; }};
 </script></body></html>"""
 
 
@@ -179,7 +276,7 @@ def save_article(client, data: dict):
     stem = f"{datetime.now().strftime('%Y%m%d-%H%M')}-{data['slug'][:60].strip('-')}"
     (out / f"{stem}.json").write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     path = out / f"{stem}.html"
-    path.write_text(_preview_html(client, data), encoding="utf-8")
+    path.write_text(preview_page(client, data), encoding="utf-8")
     return path
 
 

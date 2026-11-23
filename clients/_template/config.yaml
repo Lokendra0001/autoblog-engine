@@ -74,6 +74,13 @@ writing_notes: |
   - Never quote system prices: say they depend on roof size, load and subsidy, and point to a site survey.
   - Mention net metering rules only in general terms; they differ by electricity board.
 
+# Photo direction for article images (optional): what the Unsplash searches should and should not show.
+image_notes: |
+  - Show real rooftop installations on Indian homes and businesses, installers at work.
+  - No stock-looking people posing with thumbs up.
+# Stock photos whose description contains one of these words are never used (optional).
+image_avoid: [cartoon, illustration]
+
 # ── Call to action (shown before the FAQs) ──
 cta:
   type: "contact"           # contact | whatsapp

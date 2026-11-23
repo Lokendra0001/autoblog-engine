@@ -6,7 +6,11 @@ Binds to 127.0.0.1 only by default, so it is reachable from this computer alone.
 from __future__ import annotations
 
 import html
+import json
+import re
+import sys
 import threading
+import time
 import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +18,118 @@ import os
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import config, pipeline, planner, publisher, strapi
+
+
+class _ThreadTee:
+    """sys.stdout replacement: everything still goes to the real stream (docker logs), and lines
+    printed by a thread that called capture(sink) are also appended to that sink as (time, text).
+    The pipeline reports progress with print(), so this is how a job page sees its own log."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._local = threading.local()
+
+    def capture(self, sink):
+        self._local.sink, self._local.buf = sink, ""
+
+    def write(self, s):
+        sink = getattr(self._local, "sink", None)
+        if sink is not None:
+            *lines, self._local.buf = (self._local.buf + s).split("\n")
+            stamp = datetime.now().strftime("%H:%M:%S")
+            sink.extend((stamp, line.rstrip()) for line in lines if line.strip())
+        return self._stream.write(s)
+
+    def flush(self):
+        self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+# Pipeline steps shown on the job page: (marker, closes_previous, title, description).
+# A step starts at its marker line; when closes_previous is set, that line still belongs to the step before.
+_STEPS = [
+    ("", False, "Research", "News, research papers and real Google searches on the topic."),
+    ("[OK] Research", True, "Write and review", "AI drafts the article, an editor scores it, up to 3 passes."),
+    ("[IMAGE]", False, "Images and save", "Stock photos and cover image, then saved as a local draft."),
+    ("[SAVED]", True, "Upload", "Sends the article to the CMS."),
+]
+_TAG = re.compile(r"^\[([A-Z]+)\]\s*")
+
+
+def _line_cls(text: str) -> str:
+    if text.startswith((" ", "\t")):
+        return "sub"
+    tag = (_TAG.match(text) or [None, ""])[1]
+    return {"WARN": "warn", "ERROR": "bad", "SKIP": "warn", "OK": "ok", "SAVED": "ok",
+            "STRAPI": "ok", "REVIEW": "info", "WRITE": "info", "RESEARCH": "info", "IMAGE": "info"}.get(tag, "")
+
+
+def _job_progress(job: dict) -> list[dict]:
+    """[{title, desc, detail, state}] for the job's steps, derived from its log."""
+    lines = [t for _, t in job["log"]]
+    steps = _STEPS if job["mode"] in ("draft", "published") else _STEPS[:3]
+    starts = [0]
+    for marker, *_ in steps[1:]:
+        idx = next((i for i, t in enumerate(lines) if t.startswith(marker)), None)
+        if idx is None:
+            break
+        starts.append(idx)
+    bounds = [s + (1 if steps[i][1] else 0) for i, s in enumerate(starts)]  # first line of each step
+    current, out = len(starts) - 1, []
+    for i, (_, _, title, desc) in enumerate(steps):
+        if i < len(starts):
+            window = lines[bounds[i]:(bounds[i + 1] if i + 1 < len(bounds) else None)]
+        else:
+            window = []
+        detail = next((t for t in reversed(window)
+                       if t.startswith("[") and not t.startswith(("[WARN]", "[ERROR]", "[SAVED]"))), "")
+        if job["status"] == "done" or i < current:
+            state = "done"
+        elif i == current:
+            state = "failed" if job["status"] == "failed" else "active"
+        else:
+            state = "pending"
+        out.append({"title": title, "desc": desc, "detail": _TAG.sub("", detail), "state": state})
+    return out
+
+
+def _steps_html(job: dict) -> str:
+    marks = {"done": "✓", "failed": "!", "active": "", "pending": ""}
+    items = "".join(
+        f'<li class="step step-{s["state"]}"><span class="step-mark" aria-hidden="true">{marks[s["state"]]}</span>'
+        f'<div><b>{html.escape(s["title"])}</b><span>{html.escape(s["desc"])}</span>'
+        + (f'<em>{html.escape(s["detail"])}</em>' if s["detail"] and s["state"] != "pending" else "")
+        + f'<span class="sr-only"> ({s["state"]})</span></div></li>'
+        for s in _job_progress(job))
+    return f'<ol class="flow">{items}</ol>'
+
+
+def _notice_html(job: dict) -> str:
+    """Explains the state a user is most likely to worry about: a long wait, or the failure."""
+    if job["status"] == "failed":
+        return (f'<div class="alert" role="alert"><b>Failed</b><span>{html.escape(job["error"])}'
+                f'<br>See the log for details. Nothing was uploaded.</span></div>')
+    last = job["log"][-1][1] if job["log"] else ""
+    if job["status"] == "running" and last.startswith("[WARN]"):
+        busy = re.search(r"\b(503|429|retrying|next model|quota)\b", last)
+        hint = ("The AI service is busy. AutoBlog waits, retries and falls back to other models on its own; "
+                "this can add a few minutes. No action needed." if busy else "A step reported a problem; the job continues.")
+        return (f'<div class="notice"><b>Waiting</b><span>{hint}<code>{html.escape(_TAG.sub("", last))}</code>'
+                f'</span></div>')
+    return ""
+
+
+def _log_lines(log, start: int = 0) -> list[list[str]]:
+    return [[stamp, text, _line_cls(text)] for stamp, text in log[start:]]
+
+
+def _job_state(job: dict, since: int = 0) -> dict:
+    """What the job page polls: everything it needs to redraw, plus log lines after `since`."""
+    return {"status": job["status"], "steps": _steps_html(job), "notice": _notice_html(job),
+            "lines": _log_lines(job["log"], since), "total": len(job["log"]),
+            "redirect": f"/drafts/{quote(job['draft'])}" if job["status"] == "done" else ""}
 
 _STYLES = """
 :root {
@@ -358,23 +474,11 @@ a { color: inherit; text-decoration: none; }
 .recent { list-style: none; }
 .recent li { border-bottom: 1px solid var(--line); }
 .recent li:last-child { border-bottom: 0; }
-.recent a {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 20px;
-  background: #ffffff;
-  transition: background .12s ease;
-  text-decoration: none;
-}
-.recent a:hover { background: #f8fafc; }
-.recent-left {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
+.recent li { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px;
+             flex-wrap: wrap; padding: 12px 20px; transition: background .12s ease; }
+.recent li:hover { background: #f8fafc; }
+.recent-left { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 200px; }
+.recent-cms { flex-shrink: 0; }
 .recent-name {
   font-size: 13.5px;
   font-weight: 550;
@@ -383,7 +487,7 @@ a { color: inherit; text-decoration: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.recent a:hover .recent-name { color: var(--blue); }
+.recent-left:hover .recent-name { color: var(--blue); }
 .recent-when {
   font-size: 11.5px;
   color: var(--muted);
@@ -455,8 +559,27 @@ table.calendar { width: 100%; border-collapse: collapse; text-align: left; }
 .status-failed  { color: var(--bad);  background: var(--bad-bg); }
 
 /* ── Job page ────────────────────────────────────────────── */
-.job-grid { padding-top: 28px; padding-bottom: 72px; }
-.job { max-width: 760px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.job-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; padding-top: 28px; padding-bottom: 72px; align-items: start; }
+@media (min-width: 1100px) { .job-grid { grid-template-columns: minmax(360px, 440px) minmax(0, 1fr); } }
+.job-side { display: grid; gap: 16px; min-width: 0; }
+.job-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; }
+.job-meta > span:not(.pill) { display: grid; gap: 2px; }
+.job-meta small { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--pine-text); }
+.job-meta b { font-size: 15px; font-weight: 600; color: #fff; }
+.pill { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 12px;
+        font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+        background: rgba(244, 180, 26, .14); color: var(--gold); border: 1px solid rgba(244, 180, 26, .4); }
+.pill::before { content: ""; width: 8px; height: 8px; background: currentColor; animation: blink 1.2s steps(2) infinite; }
+body[data-status="done"] .pill { color: #4ade80; background: rgba(74, 222, 128, .12); border-color: rgba(74, 222, 128, .4); }
+body[data-status="failed"] .pill { color: #f87171; background: rgba(248, 113, 113, .12); border-color: rgba(248, 113, 113, .4); }
+body:not([data-status="running"]) .pill::before, body:not([data-status="running"]) .cursor { animation: none; }
+body:not([data-status="running"]) .progress::after { display: none; }
+body[data-status="done"] .progress { background: var(--ok); }
+body[data-status="failed"] .progress { background: var(--bad); }
+body:not([data-status="running"]) .cursor { display: none; }
+@keyframes blink { 50% { opacity: 0; } }
+
 .progress { position: relative; height: 4px; background: var(--pine-line); overflow: hidden; }
 .progress::after {
   content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 30%;
@@ -464,26 +587,53 @@ table.calendar { width: 100%; border-collapse: collapse; text-align: left; }
   animation: sweep 1.4s cubic-bezier(.6, 0, .4, 1) infinite;
 }
 @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
-.steps { list-style: none; counter-reset: s; }
-.steps li {
-  counter-increment: s;
-  display: grid;
-  grid-template-columns: 34px 1fr;
-  gap: 14px;
-  padding: 16px 20px;
-}
-.steps li + li { border-top: 1px solid var(--line); }
-.steps li::before {
-  content: counter(s, decimal-leading-zero);
-  height: 26px;
-  display: grid; place-items: center;
-  font-family: var(--mono); font-size: 12px;
-  border: 1px solid var(--line-2);
-  color: var(--muted);
-}
-.steps li:first-child::before { background: var(--pine); border-color: var(--pine); color: #fff; }
-.steps b { display: block; font-weight: 500; }
-.steps span { font-size: 13px; color: var(--muted); }
+
+.flow { list-style: none; padding: 8px 0; }
+.step { position: relative; display: grid; grid-template-columns: 28px 1fr; gap: 14px; padding: 14px 20px; }
+.step:not(:last-child)::after { content: ""; position: absolute; left: 33px; top: 44px; bottom: -14px; width: 2px; background: var(--line); }
+.step-done:not(:last-child)::after { background: var(--blue); }
+.step-mark { width: 28px; height: 28px; display: grid; place-items: center; position: relative; z-index: 1;
+             font-size: 14px; font-weight: 700; border: 2px solid var(--line-2); background: var(--paper); color: var(--muted); }
+.step-done .step-mark { background: var(--blue); border-color: var(--blue); color: #fff; }
+.step-failed .step-mark { background: var(--bad); border-color: var(--bad); color: #fff; }
+.step-active .step-mark { border-color: var(--gold); }
+.step-active .step-mark::before { content: ""; width: 12px; height: 12px; background: var(--gold); animation: pulse 1s ease-in-out infinite alternate; }
+@keyframes pulse { from { transform: scale(.55); opacity: .6; } to { transform: scale(1); opacity: 1; } }
+.step b { display: block; font-weight: 600; color: var(--heading); }
+.step span { display: block; font-size: 13px; color: var(--muted); }
+.step-pending b { color: var(--muted); font-weight: 500; }
+.step em { display: block; margin-top: 6px; padding: 6px 10px; font-style: normal; font-family: var(--mono); font-size: 12px;
+           color: var(--ink-2); background: var(--stone); border-left: 3px solid var(--line-2); overflow-wrap: anywhere; }
+.step-active em { border-left-color: var(--gold); background: var(--warn-bg); }
+.step-done em { border-left-color: var(--blue); }
+.step-failed em { border-left-color: var(--bad); background: var(--bad-bg); }
+
+.notice { display: grid; gap: 4px; padding: 14px 16px; background: var(--warn-bg); border: 1px solid #fcd34d; border-left: 4px solid var(--warn); font-size: 13px; color: var(--ink-2); }
+.notice b { color: var(--warn); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.notice code { display: block; margin-top: 6px; font-family: var(--mono); font-size: 12px; color: var(--warn); overflow-wrap: anywhere; }
+.job-side .alert { margin-top: 0; }
+.notice a { color: var(--blue); font-weight: 600; text-decoration: underline; }
+.notice.job-running { margin-top: 28px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; }
+.ready { padding: 14px 16px; background: var(--ok-bg); border: 1px solid #86efac; border-left: 4px solid var(--ok); color: var(--ink-2); }
+.ready b { color: var(--ok); }
+.ready a { color: var(--blue); font-weight: 600; text-decoration: underline; margin-left: 6px; }
+
+.terminal { background: #0b1220; border-color: #1e293b; min-width: 0; }
+.terminal .panel-head { border-bottom-color: #1e293b; }
+.terminal .panel-head h2 { color: #e2e8f0; }
+.logbox { height: clamp(360px, 68vh, 820px); overflow: auto; padding: 12px 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; color: #cbd5e1; }
+.logbox:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
+.ln { display: grid; grid-template-columns: 72px 1fr; gap: 12px; padding: 1px 16px; }
+.ln:hover { background: rgba(148, 163, 184, .08); }
+.ln time { color: #475569; user-select: none; }
+.ln span { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ln.ok span { color: #4ade80; }
+.ln.info span { color: #7dd3fc; }
+.ln.warn span { color: #fbbf24; }
+.ln.bad span { color: #f87171; font-weight: 600; }
+.ln.sub span { color: #94a3b8; }
+.cursor span { color: var(--gold); animation: blink 1s steps(2) infinite; }
+
 .job-foot {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
   padding: 14px 20px;
@@ -517,7 +667,7 @@ table.calendar { width: 100%; border-collapse: collapse; text-align: left; }
   .grid > * { gap: 16px; }
   .panel-head { padding: 0 16px; height: 48px; }
   .panel-body { padding: 16px; }
-  .recent a { padding: 12px 16px; }
+  .recent li { padding: 12px 16px; }
   .input { font-size: 16px; }  /* stops iOS zoom on focus */
 
   /* Calendar rows become stacked blocks */
@@ -541,10 +691,13 @@ table.calendar { width: 100%; border-collapse: collapse; text-align: left; }
   .calendar .c-topic { grid-area: title; }
   .calendar .c-cat { grid-area: meta; }
   .calendar .c-cms { grid-area: cms; justify-self: end; }
-  .job-grid { padding-top: 16px; padding-bottom: 48px; }
+  .job-grid { gap: 16px; padding-top: 16px; padding-bottom: 48px; }
   .m-hide { display: none; }
-  .steps li { padding: 14px 16px; }
+  .step { padding: 12px 16px; }
+  .step:not(:last-child)::after { left: 29px; }
   .job-foot { padding: 12px 16px; }
+  .logbox { height: 60vh; font-size: 12px; }
+  .ln { grid-template-columns: 1fr; gap: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -596,49 +749,128 @@ def _dest_label(destination: str, cms_status: str) -> str:
     return f"{destination} / {cms_status}" if cms_status else "Local files"
 
 
-def _render_job_page(client_name: str, today: str, keyword: str, started: str,
-                     destination: str, cms_status: str, uploading: bool) -> str:
-    upload_step = (
-        f'<li><div><b>{"Publish on" if cms_status == "published" else "Upload to"} {destination}</b>'
-        f'<span>{"Goes live on the website." if cms_status == "published" else "Saved as a draft for review in the CMS."}</span></div></li>'
-        if uploading else ""
-    )
+_JOB_JS = r"""
+(function () {
+  const root = document.getElementById("job");
+  const logEl = document.getElementById("log");
+  const box = document.getElementById("logbox");
+  const t0 = Number(root.dataset.t0) * 1000;
+  let total = Number(root.dataset.total), status = root.dataset.status, follow = true;
+
+  box.addEventListener("scroll", () => { follow = box.scrollTop + box.clientHeight >= box.scrollHeight - 24; });
+  const toBottom = () => { if (follow) box.scrollTop = box.scrollHeight; };
+  toBottom();
+
+  function clock() {
+    const s = Math.max(0, Math.floor(((status === "running" ? Date.now() : Number(root.dataset.t1) * 1000) - t0) / 1000));
+    document.getElementById("elapsed").textContent =
+      String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  }
+
+  function addLines(lines) {
+    for (const [ts, text, cls] of lines) {
+      const row = document.createElement("div");
+      row.className = "ln " + cls;
+      const t = document.createElement("time"); t.textContent = ts;
+      const m = document.createElement("span"); m.textContent = text;
+      row.append(t, m); logEl.append(row);
+    }
+    document.getElementById("count").textContent = total + " lines";
+    toBottom();
+  }
+
+  function setStatus(st) {
+    status = st; root.dataset.status = st;
+    document.body.dataset.status = st;
+    document.getElementById("pill").textContent = {running: "Running", done: "Done", failed: "Failed"}[st];
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch(location.pathname + "/status?since=" + total, {cache: "no-store"});
+      if (r.status === 404) { setStatus("failed"); document.getElementById("notice").innerHTML =
+        '<div class="alert" role="alert"><b>Lost</b><span>This job is no longer on the server (it was restarted). Check Recent drafts on the dashboard.</span></div>'; return; }
+      const d = await r.json();
+      total = d.total;
+      document.getElementById("steps").innerHTML = d.steps;
+      document.getElementById("notice").innerHTML = d.notice;
+      addLines(d.lines);
+      if (d.status !== "running") {
+        root.dataset.t1 = String(Date.now() / 1000);
+        setStatus(d.status); clock();
+        if (d.redirect) {
+          document.getElementById("ready").hidden = false;
+          document.getElementById("ready-link").href = d.redirect;
+          setTimeout(() => { location.href = d.redirect; }, 2500);
+        }
+        return;
+      }
+    } catch (e) { /* network blip: try again */ }
+    setTimeout(poll, 2000);
+  }
+
+  clock();
+  if (status === "running") { setInterval(clock, 1000); setTimeout(poll, 2000); }
+})();
+"""
+
+
+def _render_job_page(client_name: str, today: str, job: dict, destination: str) -> str:
+    cms_status = job["mode"] if job["mode"] in ("draft", "published") else ""
+    target = (f"{'Publish on' if cms_status == 'published' else 'Draft in'} {html.escape(destination)}"
+              if cms_status else "Local draft only")
+    status = job["status"]
+    log_rows = "".join(f'<div class="ln {cls}"><time>{stamp}</time><span>{html.escape(text)}</span></div>'
+                       for stamp, text, cls in _log_lines(job["log"]))
+    refresh = '<noscript><meta http-equiv="refresh" content="5"></noscript>' if status == "running" else ""
+    pill = {"running": "Running", "done": "Done", "failed": "Failed"}[status]
     return f"""<!doctype html>
 <html lang="en">
 <head>
 {_COMMON_HEAD}
-<meta http-equiv="refresh" content="5">
-<title>Writing: {keyword} · AutoBlog</title>
+{refresh}
+<title>Writing: {html.escape(job["keyword"])} · AutoBlog</title>
 </head>
-<body>
+<body data-status="{status}">
 <header class="band">
   <div class="container">
-    {_bar(today, _dest_label(destination, cms_status))}
+    {_bar(today, _dest_label(html.escape(destination), cms_status))}
     <div class="hero">
       <div>
         <p class="kicker">{client_name} · Writing article</p>
-        <h1>{keyword}</h1>
+        <h1>{html.escape(job["keyword"])}</h1>
       </div>
-      <p>Researching and writing now. This page refreshes every 5 seconds and opens the article when it is ready.</p>
+      <div class="job-meta">
+        <span class="pill" id="pill">{pill}</span>
+        <span><small>Elapsed</small><b class="mono" id="elapsed">00:00</b></span>
+        <span><small>Started</small><b class="mono">{job["started"]}</b></span>
+        <span><small>Result</small><b>{target}</b></span>
+      </div>
     </div>
   </div>
   <div class="progress" role="progressbar" aria-label="Generating article"></div>
 </header>
-<main class="container job-grid" aria-live="polite">
-  <section class="panel job">
-    <div class="panel-head"><h2>Pipeline</h2><span class="meta">Started {started}</span></div>
-    <ol class="steps">
-      <li><div><b>Research</b><span>Gathers sources and facts on the topic.</span></div></li>
-      <li><div><b>Write and review</b><span>Drafts the article and revises it, up to three passes.</span></div></li>
-      <li><div><b>Save draft</b><span>Stored locally so you can preview it here.</span></div></li>
-      {upload_step}
-    </ol>
-    <div class="job-foot">
-      <span>Usually takes 1–4 minutes</span>
-      <a class="btn-line" href="/">{_BACK}Dashboard</a>
-    </div>
+<main class="container job-grid" id="job" data-t0="{job["t0"]}" data-t1="{job.get("t1", job["t0"])}"
+      data-total="{len(job["log"])}" data-status="{status}">
+  <div class="job-side">
+    <div id="notice" aria-live="polite">{_notice_html(job)}</div>
+    <div class="ready" id="ready" hidden><b>Article ready.</b> Opening it now… <a id="ready-link" href="#">Open article</a></div>
+    <section class="panel">
+      <div class="panel-head"><h2>Pipeline</h2><span class="meta">Usually 2–6 min</span></div>
+      <div id="steps">{_steps_html(job)}</div>
+      <div class="job-foot">
+        <span>You can leave this page; the job keeps running.</span>
+        <a class="btn-line" href="/">{_BACK}Dashboard</a>
+      </div>
+    </section>
+  </div>
+  <section class="panel terminal">
+    <div class="panel-head"><h2>Live log</h2><span class="meta" id="count">{len(job["log"])} lines</span></div>
+    <div class="logbox" id="logbox" tabindex="0" aria-label="Job log"><div id="log">{log_rows}</div>
+      <div class="ln cursor" aria-hidden="true"><time></time><span>▍</span></div></div>
   </section>
 </main>
+<script>{_JOB_JS}</script>
 </body>
 </html>"""
 
@@ -748,8 +980,6 @@ def _render_dashboard(
 
 def serve(client, port=8000, host="127.0.0.1", reload=False):
     if reload:
-        import sys
-        import time
         from pathlib import Path
         watch_dirs = [Path(__file__).parent, Path("clients")]
         def get_mtimes():
@@ -779,16 +1009,23 @@ def serve(client, port=8000, host="127.0.0.1", reload=False):
     jobs: dict[str, dict] = {}
     lock = threading.Lock()
 
+    if not isinstance(sys.stdout, _ThreadTee):
+        sys.stdout = _ThreadTee(sys.stdout)
+    tee = sys.stdout
+
     def run_job(job_id, keyword, mode):
+        tee.capture(jobs[job_id]["log"])
         try:
             upload = mode in ("draft", "published")
             path = pipeline.preview_article(client, keyword, upload=upload, status=mode if upload else None)["path"]
             update = {"status": "done", "draft": path.name}
         except Exception as e:
-            print(f"[ERROR] {e}")
-            update = {"status": "failed", "error": str(e)}
+            print(f"[ERROR] {e.__class__.__name__}: {e}")
+            update = {"status": "failed", "error": str(e) or e.__class__.__name__}
+        finally:
+            tee.capture(None)
         with lock:
-            jobs[job_id].update(update)
+            jobs[job_id].update(update, t1=time.time())
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code, body, ctype="text/html; charset=utf-8", headers=None):
@@ -810,24 +1047,33 @@ def serve(client, port=8000, host="127.0.0.1", reload=False):
 
         def _form(self, error=""):
             files = sorted(drafts_dir.glob("*.html"), reverse=True)[:8] if drafts_dir.exists() else []
+            today = planner.local_today(client)
+            plan = planner.load_plan(client, today.strftime("%Y-%m"))
+            live = self._live_statuses([it.get("draft") for it in (plan or {}).get("items", [])]
+                                       + [f.name for f in files])
             if files:
-                recent_drafts = '<ul class="recent">' + "".join(
-                    f'<li><a href="/drafts/{quote(f.name)}" title="{html.escape(f.name)}">'
-                    f'<div class="recent-left">'
-                    f'<span class="recent-name">{html.escape(name)}</span>'
-                    f'<span class="recent-when">Saved: {when or "Draft"}</span>'
-                    f'</div>'
-                    f'<span class="recent-pill">Preview Article ↗</span>'
-                    f'</a></li>'
-                    for f in files
-                    for name, when in [_draft_label(f.stem)]
-                ) + '</ul>'
+                rows = ""
+                for f in files:
+                    name, when = _draft_label(f.stem)
+                    cms = (self._cms_cell({"draft": f.name, "title": name}, live)
+                           if pipeline.uploaded_draft(client, f.name) else '<span class="recent-pill">Local only</span>')
+                    rows += (f'<li><a class="recent-left" href="/drafts/{quote(f.name)}" title="Preview {html.escape(f.name)}">'
+                             f'<span class="recent-name">{html.escape(name)}</span>'
+                             f'<span class="recent-when">Saved: {when or "Draft"} · Preview ↗</span></a>'
+                             f'<div class="recent-cms">{cms}</div></li>')
+                recent_drafts = f'<ul class="recent">{rows}</ul>'
             else:
                 recent_drafts = '<p class="empty">No drafts yet. Articles you generate will appear here.</p>'
 
             error_banner = (
                 f'<div class="alert" role="alert"><b>Notice</b><span>{html.escape(error)}</span></div>'
             ) if error else ""
+            with lock:
+                running = next(((i, j) for i, j in jobs.items() if j["status"] == "running"), None)
+            if running:
+                error_banner += (
+                    f'<div class="notice job-running"><b>Writing now</b><span>"{html.escape(running[1]["keyword"])}" '
+                    f'is being generated. <a href="/jobs/{running[0]}">View progress and live log</a></span></div>')
 
             cms_status = client.publish_status
             if cms_status:
@@ -844,8 +1090,6 @@ def serve(client, port=8000, host="127.0.0.1", reload=False):
             else:
                 upload_box = ""
 
-            today = planner.local_today(client)
-            plan = planner.load_plan(client, today.strftime("%Y-%m"))
             auto_box = self._auto_box(plan) if cms_status else ""
             example = (client.sources.keyword_seeds or ['GFRP rebar applications'])[0]
 
@@ -859,7 +1103,7 @@ def serve(client, port=8000, host="127.0.0.1", reload=False):
                 error_banner=error_banner,
                 upload_box=upload_box,
                 example_keyword=html.escape(example),
-                plan_table=self._plan_html(plan, today.isoformat(), self._live_statuses(plan)),
+                plan_table=self._plan_html(plan, today.isoformat(), live),
                 recent_drafts=recent_drafts,
                 recent_count=len(files),
                 auto_box=auto_box,
@@ -905,12 +1149,12 @@ def serve(client, port=8000, host="127.0.0.1", reload=False):
                   '<span>Takes effect from the next scheduled run.</span></p></div></section>'
             )
 
-        def _live_statuses(self, plan):
+        def _live_statuses(self, drafts):
             """documentId -> "draft"/"published" as Strapi has it now, so a post published in the admin
             does not get a Publish button. None when Strapi is not used or could not be read."""
             if client.destination != "strapi":
                 return None
-            if not any(pipeline.uploaded_draft(client, it.get("draft")) for it in (plan or {}).get("items", [])):
+            if not any(pipeline.uploaded_draft(client, d) for d in drafts):
                 return None
             blogs = strapi.list_blogs(client)
             return None if blogs is None else {b["documentId"]: b["status"] for b in blogs}
@@ -994,24 +1238,34 @@ def serve(client, port=8000, host="127.0.0.1", reload=False):
                 types = {".html": "text/html; charset=utf-8", ".json": "application/json; charset=utf-8",
                          ".jpg": "image/jpeg"}
                 if "/" not in name and "\\" not in name and f.suffix in types and f.is_file():
+                    if f.suffix == ".html" and f.with_suffix(".json").is_file():
+                        try:  # render from the saved fields, so older drafts get the current preview design
+                            data = json.loads(f.with_suffix(".json").read_text(encoding="utf-8"))
+                            return self._send(200, pipeline.preview_page(client, data))
+                        except (ValueError, KeyError) as e:
+                            print(f"[WARN] Preview render failed for {name}: {e}; serving the saved page")
                     return self._send(200, f.read_bytes(), types[f.suffix])
             if self.path.startswith("/jobs/"):
+                url = urlparse(self.path)
+                job_id, _, sub = url.path[len("/jobs/"):].partition("/")
                 with lock:
-                    job = dict(jobs.get(self.path[len("/jobs/"):], {}))
-                if job.get("status") == "done":
-                    return self._send(303, "", headers={"Location": f"/drafts/{quote(job['draft'])}"})
-                if job.get("status") == "failed":
-                    return self._form(f"Generation failed for \"{job['keyword']}\": {job['error']}")
-                if job:
-                    cms_status = job["mode"] if job["mode"] in ("draft", "published") else ""
+                    job = jobs.get(job_id)
+                    job = {**job, "log": list(job["log"])} if job else None
+                if job and sub == "status":
+                    try:
+                        since = max(0, int(parse_qs(url.query).get("since", ["0"])[0]))
+                    except ValueError:
+                        since = 0
+                    return self._send(200, json.dumps(_job_state(job, since)), "application/json; charset=utf-8",
+                                      headers={"Cache-Control": "no-store"})
+                if job and not sub:
+                    if job["status"] == "done":
+                        return self._send(303, "", headers={"Location": f"/drafts/{quote(job['draft'])}"})
                     return self._send(200, _render_job_page(
                         client_name=html.escape(client.brand.name),
                         today=planner.local_today(client).strftime("%a, %d %b %Y"),
-                        keyword=html.escape(job["keyword"]),
-                        started=job["started"],
-                        destination=html.escape(client.destination.title()),
-                        cms_status=html.escape(cms_status),
-                        uploading=bool(cms_status),
+                        job=job,
+                        destination=client.destination.title(),
                     ))
             self._send(404, "Not found", "text/plain; charset=utf-8")
 
@@ -1025,10 +1279,7 @@ def serve(client, port=8000, host="127.0.0.1", reload=False):
             length = min(int(self.headers.get("Content-Length") or 0), 10_000)
             form = parse_qs(self.rfile.read(length).decode("utf-8"))
             if self.path == "/publish":
-                draft = form.get("draft", [""])[0]
-                plan = planner.load_plan(client, planner.local_today(client).strftime("%Y-%m"))
-                if not any(it.get("draft") == draft for it in (plan or {}).get("items", [])):
-                    return self._form("That article is not in this month's calendar.")
+                draft = form.get("draft", [""])[0]  # publish_saved only accepts our own CMS uploads
                 res = pipeline.publish_saved(client, draft)
                 if res["result"] != "published":
                     return self._form(f"Could not publish: {res['reason']}")
@@ -1054,8 +1305,8 @@ def serve(client, port=8000, host="127.0.0.1", reload=False):
                 running = next((i for i, j in jobs.items() if j["status"] == "running"), None)
                 if running is None:
                     running = uuid.uuid4().hex[:12]
-                    jobs[running] = {"status": "running", "keyword": keyword, "mode": mode,
-                                     "started": datetime.now().strftime("%H:%M:%S")}
+                    jobs[running] = {"status": "running", "keyword": keyword, "mode": mode, "log": [],
+                                     "started": datetime.now().strftime("%H:%M:%S"), "t0": time.time()}
                     threading.Thread(target=run_job, args=(running, keyword, mode), daemon=True).start()
             self._send(303, "", headers={"Location": f"/jobs/{running}"})
 

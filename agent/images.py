@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 import requests
 
@@ -11,38 +12,51 @@ UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
 _UA = {"User-Agent": "Mozilla/5.0 (compatible; AutoBlogEngine/1.0)"}
 
 
+def _describe(photo) -> str:
+    return " ".join([photo.get("description") or "", photo.get("alt_description") or "",
+                     *[t.get("title", "") for t in photo.get("tags", [])]]).lower()
+
+
 def _match(query, photo) -> int:
     """How many query words appear in the photo's descriptions/tags (Unsplash's own ranking is loose)."""
-    text = " ".join([photo.get("description") or "", photo.get("alt_description") or "",
-                     *[t.get("title", "") for t in photo.get("tags", [])]]).lower()
+    text = _describe(photo)
     return sum(1 for w in set(query.lower().split()) if len(w) > 2 and w in text)
 
 
-def fetch_stock_image(keyword):
+def _usable(query, photo, avoid) -> bool:
+    """Shares 2 words with the search (1 for short searches) and shows nothing on the client's avoid list."""
+    text = _describe(photo)
+    need = min(2, len({w for w in query.lower().split() if len(w) > 2}))
+    return _match(query, photo) >= max(need, 1) and not any(re.search(rf"\b{re.escape(w.lower())}\b", text) for w in avoid)
+
+
+def fetch_stock_image(keyword, avoid=()):
     """Stock photo from Unsplash (free API, attribution required).
 
-    Returns (image_url, credit_html, credit_text) or (None, None, None). Also pings Unsplash's
-    download endpoint, which their API guidelines require when a photo is used.
+    Photos that share too few words with the search, or whose description contains a word in `avoid`, are
+    skipped. Returns (image_url, credit_html, credit_text) or (None, None, None): no photo beats an
+    unrelated one. Also pings Unsplash's download endpoint, which their API guidelines require.
     """
     if not UNSPLASH_ACCESS_KEY:
         return None, None, None
     auth = {**_UA, "Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
     try:
-        # Niche phrases can return nothing, so drop trailing words until something matches.
+        # Niche phrases can return nothing, so drop trailing words, but never below 2 (one word is too vague).
         words, results = keyword.split()[:6], []
-        while words and not results:
+        while len(words) >= min(2, len(keyword.split())) and words and not results:
             resp = requests.get(
                 "https://api.unsplash.com/search/photos",
                 headers=auth,
-                params={"query": " ".join(words), "per_page": 10,
+                params={"query": " ".join(words), "per_page": 20,
                         "orientation": "landscape", "content_filter": "high"},
                 timeout=15)
             if resp.status_code != 200:
                 print(f"[WARN] Unsplash search failed: HTTP {resp.status_code}")
                 return None, None, None
-            results = resp.json().get("results", [])
+            results = [p for p in resp.json().get("results", []) if _usable(keyword, p, avoid)]
             words = words[:-1]
         if not results:
+            print(f"[IMAGE] No suitable photo for \"{keyword}\"")
             return None, None, None
         results.sort(key=lambda p: -_match(keyword, p))  # stable: ties keep Unsplash's ranking
         photo = results[0]
@@ -51,6 +65,7 @@ def fetch_stock_image(keyword):
         user = photo["user"]
         credit = (f'Photo by <a href="{user["links"]["html"]}?{ref}">{user["name"]}</a> '
                   f'on <a href="https://unsplash.com/?{ref}">Unsplash</a>')
+        print(f"[IMAGE] \"{keyword}\" -> {photo.get('alt_description') or photo['links']['html']}")
         return (photo["urls"]["raw"] + "&w=1600&q=80&fm=jpg&fit=max", credit,
                 f'Photo by {user["name"]} on Unsplash ({photo["links"]["html"]})')
     except Exception as e:

@@ -13,6 +13,7 @@ services:
     environment:
       SCHEDULE_TIME: ${SCHEDULE_TIME:-09:07}
       SCHEDULE_TZ: ${SCHEDULE_TZ:-Asia/Kolkata}
+      TZ: ${SCHEDULE_TZ:-Asia/Kolkata}   # clock for logs and timestamps
     volumes:
       - seo-data:/app/data
       - ./clients:/app/clients:ro   # edit config.yaml, then: docker compose restart writer
@@ -27,6 +28,8 @@ services:
     restart: unless-stopped
     init: true
     env_file: .env
+    environment:
+      TZ: ${SCHEDULE_TZ:-Asia/Kolkata}   # clock for logs, job page and draft names
     command: ["sh", "-c", "exec python cli.py serve \"$${CLIENT:-bhandari}\" --host 0.0.0.0 --port 8000"]
     ports:
       - "127.0.0.1:8000:8000"

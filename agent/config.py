@@ -166,6 +166,8 @@ class ClientConfig:
     ])
     context: str = ""                     # company/product knowledge the writer must rely on
     writing_notes: str = ""               # extra writing rules for this niche (added to the prompt)
+    image_notes: str = ""                 # what photos should (not) show for this brand (added to the prompt)
+    image_avoid: list = field(default_factory=list)  # words that reject a stock photo, e.g. "rusty"
     internal_links: str = ""              # freeform block injected into the writer prompt
     sitemap_url: str = ""                 # used to pull recent posts for dynamic linking
     posts_per_day: int = 1

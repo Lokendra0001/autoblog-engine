@@ -151,6 +151,67 @@ def _fix_dashes(a: Article) -> Article:
     return a
 
 
+_SMALL_WORDS = {"a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into", "nor", "of", "on",
+                "or", "per", "the", "to", "via", "vs", "with"}
+
+
+def _word_forms(text: str) -> dict[str, str]:
+    """lowercase word -> how the text usually writes it ("gfrp" -> "GFRP", "india" -> "India")."""
+    counts: dict[str, dict[str, int]] = {}
+    for w in re.findall(r"[A-Za-z][A-Za-z0-9]*", text):
+        forms = counts.setdefault(w.lower(), {})
+        forms[w] = forms.get(w, 0) + 1
+    return {low: max(forms, key=forms.get) for low, forms in counts.items()}
+
+
+def cased_keyword(keyword: str, text: str) -> str:
+    """The keyword with each word cased the way `text` writes it: "gfrp rebar market india" ->
+    "GFRP rebar market India". Words the text never uses keep the casing they were typed in."""
+    forms = _word_forms(text)
+    return re.sub(r"[A-Za-z][A-Za-z0-9]*", lambda m: forms.get(m.group(0).lower(), m.group(0))
+                  if m.group(0).islower() else m.group(0), keyword)
+
+
+def title_case(title: str, text: str = "") -> str:
+    """Title Case that keeps acronyms: words written in capitals in `text` (GFRP, IS, IRC) stay so,
+    small words stay lowercase except first and after a colon."""
+    forms = _word_forms(text)
+    out, start = [], True
+    for token in title.split(" "):
+        def fix(m, first=start):
+            w = m.group(0)
+            known = forms.get(w.lower(), "")
+            if known and known[1:] != known[1:].lower():  # acronym or mixed case in the text: GFRP, IoT
+                return known
+            if w != w.lower():                             # already has capitals: leave it
+                return w
+            return w if (w in _SMALL_WORDS and not first) else w[0].upper() + w[1:]
+        out.append(re.sub(r"[A-Za-z][A-Za-z0-9]*", fix, token, count=1) if token else token)
+        # later parts of a hyphenated word (corrosion-free -> Corrosion-Free)
+        out[-1] = re.sub(r"(?<=-)([a-z])", lambda m: m.group(1).upper(), out[-1])
+        if token:
+            start = token.endswith(":")
+    return " ".join(out)
+
+
+def _fix_case(a: Article, keyword: str) -> Article:
+    """Models copy the keyword exactly as typed ("gfrp rebar market india"). Write it the way the
+    article does, Title Case the title and start every heading, paragraph and list item with a capital."""
+    body = text_of(a.content)
+    shown = cased_keyword(keyword, body)
+    pattern = re.compile(rf"(?<![A-Za-z0-9-]){re.escape(keyword)}(?![A-Za-z0-9-])", re.I)
+
+    def recase(m):  # add missing capitals; keep capitals already there (sentence start, Title Case headings)
+        return "".join(f.upper() if w.isupper() else f for f, w in zip(m.group(0), shown))
+    a.content = pattern.sub(recase, a.content)
+    a.meta = pattern.sub(recase, a.meta)
+    a.content = re.sub(r"(<(?:h[23]|p|li)(?:\s[^>]*)?>\s*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), a.content)
+    a.title = title_case(a.title, body)
+    if a.meta:
+        a.meta = a.meta[0].upper() + a.meta[1:]
+    return a
+
+
 _FIRST_P = re.compile(r"<p[^>]*>(.*?)</p>", re.S)
 
 
@@ -284,6 +345,19 @@ Return JSON: {{"score": <integer 1-10>, "issues": [<up to 8 specific, actionable
 
 # ── the writer ────────────────────────────────────────────────────────────────
 
+_IMAGE_RULES = """   IMAGE RULES (header image and both placeholders):
+   - Describe one concrete scene a photographer would shoot: who or what, doing what, where.
+     Good: "workers tying reinforcement bars on site", "concrete bridge deck under construction",
+     "engineer reviewing drawings at building site". Bad: "GFRP rebar market growth", "rebar cost comparison".
+   - Use plain everyday words a stock library tags photos with. No acronyms, product codes, brand names,
+     standards (IS, IRC, ASTM), numbers or abstract ideas (market, growth, cost, benefits, regulations).
+   - If the product itself is too specialised to be photographed, show the setting where it is used.
+   - No text, charts, diagrams, illustrations or screenshots.
+   - The two placeholders show different scenes, each matching the section above it; the header image shows
+     the article's main subject.
+"""
+
+
 def _system_prompt(client, keyword: str) -> str:
     length = (f"{client.min_words}-{client.max_words} words" if client.max_words
               else f"minimum {client.min_words} words")
@@ -293,6 +367,8 @@ def _system_prompt(client, keyword: str) -> str:
                    if client.internal_links else "")
     notes_block = (f"\nCLIENT-SPECIFIC RULES (follow these too):\n{client.writing_notes}\n"
                    if client.writing_notes else "")
+    image_block = _IMAGE_RULES + (f"   For {client.brand.name}:\n" + "".join(
+        f"   {line.strip()}\n" for line in client.image_notes.strip().splitlines()) if client.image_notes else "")
     return f"""You are a senior technical content writer and SEO specialist for {client.brand.name}.
 You write for {client.audience}. Voice: {client.brand.voice}
 Always respond using the exact delimiter format requested — no markdown, no code fences.
@@ -337,8 +413,8 @@ SEO REQUIREMENTS:
    the first sentence answers the question.
 6. Exactly 2 image placeholders, as shown in the structure, in this format:
    [IMAGE_PLACEHOLDER: 3-6 word stock photo search phrase]
-   The phrase must describe a real photograph (e.g. "engineers inspecting a factory floor"), not a diagram.
-
+   Each phrase is searched on a free stock photo library (Unsplash), so follow the IMAGE RULES below.
+{image_block}
 CONTENT FORMAT: clean semantic HTML only (p, h2, h3, ul, ol, li, strong, a, blockquote, table).
 No <h1> (the page shows the title as the H1), no classes, no inline styles, no <style> or <div>.
 
@@ -381,7 +457,7 @@ Respond using EXACTLY this format (no JSON, no code fences):
 [6-8 comma-separated tags]
 ===TAGS_END===
 ===FEATURED_IMAGE===
-[3-6 word stock photo search phrase for the header image, a real photograph]
+[3-6 word stock photo search phrase for the header image, following the IMAGE RULES]
 ===FEATURED_IMAGE_END===
 ===CONTENT===
 [The complete HTML, no bracketed instructions remaining except the 2 IMAGE_PLACEHOLDER lines]
@@ -390,6 +466,9 @@ Respond using EXACTLY this format (no JSON, no code fences):
 
 def generate_blog(client, keyword: str, research: str = "") -> Article:
     """Write, check and review an article; rewrite (max 2x) until it passes. Returns the best draft."""
+    # The keyword is often typed in lowercase; prompts show it cased as the sources write it ("GFRP"),
+    # because the model copies the exact phrase it is given. All checks ignore case.
+    keyword = cased_keyword(keyword, f"{research}\n{client.context}")
     system = _system_prompt(client, keyword)
     research_block = f"{research}\n\n" if research else ""
     recent = get_recent_blog_links(client)
@@ -400,6 +479,7 @@ def generate_blog(client, keyword: str, research: str = "") -> Article:
         user_prompt = (f"{research_block}{recent_block}{feedback}"
                        f'Now write the complete article for the focus keyword: "{keyword}". '
                        "Follow the structure and the output format exactly.")
+        print(f"[WRITE] Writing draft {attempt} of {MAX_DRAFTS}" + (" (applying editor feedback)" if feedback else ""))
         try:
             raw = call_ai(messages=[{"role": "user", "content": user_prompt}],
                           system=system, max_tokens=16000, tier="smart", cache_system=True)
@@ -409,7 +489,7 @@ def generate_blog(client, keyword: str, research: str = "") -> Article:
             print(f"[REVIEW] Stopping rewrites ({e.__class__.__name__}: quota); using the best draft so far")
             break
         try:
-            draft = _fix_seo(_fix_dashes(_parse(raw, keyword)), keyword)
+            draft = _fix_case(_fix_seo(_fix_dashes(_parse(raw, keyword)), keyword), keyword)
         except ValueError as e:
             print(f"[REVIEW] Draft {attempt}: unusable output ({e})")
             feedback = f"EDITOR FEEDBACK: the previous reply was unusable: {e}. Use the exact format.\n\n"
