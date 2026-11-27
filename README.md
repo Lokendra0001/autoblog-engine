@@ -52,6 +52,69 @@ If writing fails (for example Gemini is busy), the article is retried on the nex
 Only Gemini and Unsplash are required. Without an OpenAlex key, articles skip research papers.
 Without a CMS, articles are just saved as files.
 
+## Technology Stack & Search Mechanisms
+
+Here is every technology, search engine, and API used by the engine under the hood:
+
+| Task / Purpose | Technology / Service Used | How It Works Under the Hood | Needs Key? |
+|---|---|---|:---:|
+| **Real User Questions & Keywords** | **Google Suggest API** (`suggestqueries.google.com`) | Queries Google autocomplete with seed keywords, alphabet letters (a–z), and prefixes (*what, how, why, vs*) to extract real user search intent and FAQ questions. | ❌ Free HTTP |
+| **Industry News & Trends** | **Google News RSS** (`news.google.com/rss`) | Scrapes Google News RSS feeds filtered by keyword, client country (`gl`), and date window (`when:1y` or `7d`). | ❌ Free HTTP |
+| **Scientific & Engineering Papers** | **OpenAlex API** (`api.openalex.org/works`) | Searches global peer-reviewed academic journals for published research, abstracts, and engineering standards. | 🟢 Free Key (`OPENALEX_API_KEY`) |
+| **Technical Background & Definitions** | **Wikipedia REST API** (`en.wikipedia.org/w/api.php`) | Performs semantic query search and extracts introductory definitions and material physics. | ❌ Free HTTP |
+| **Article Writing & AI Reasoning** | **Google Gemini API** (`google-genai` SDK) | Multi-pass LLM generation: system prompt, topic planning, long-form drafting (1,200+ words), and 3-stage iterative self-review. | 🟢 Free Key (`GEMINI_API_KEY`) |
+| **Royalty-Free Photos & Media** | **Unsplash API** (`api.unsplash.com`) | Searches relevant high-res commercial photography, selects cover + 2 inline body photos with accessible alt tags. | 🟢 Free Key (`UNSPLASH_ACCESS_KEY`) |
+| **CMS Publishing / Storage** | **Strapi REST API** or **WordPress REST API** | Uploads formatted HTML/Markdown, attaches media assets, and sets status (`draft` or `published`). | 🟢 Token (`STRAPI_API_TOKEN`) |
+| **Search Engine Indexing Ping** | **Google & Bing Ping Endpoints** | Notifies search engine crawlers automatically when a post is marked published. | ❌ Automatic |
+| **Web Dashboard** | **Python `http.server` + Custom CSS** | Lightweight local dashboard on port `8000` (or `8085`) to view the calendar, recent drafts, and manual generation. | ❌ Built-in Python |
+| **Deployment & Scheduler** | **Docker & Docker Compose** (`cli.py daemon`) | Runs the background scheduler container and web dashboard container isolated on your VPS. | ❌ Docker |
+
+## Full Operational Flow
+
+```mermaid
+flowchart TD
+    subgraph S1["1. Monthly Planning Phase (1st Day of Month)"]
+        A[Start Monthly Job] --> B[Fetch Google Suggest autocomplete queries]
+        B --> C[Fetch Google News RSS for industry trends]
+        C --> D[Read existing blogs from Strapi/WordPress to avoid duplicates]
+        D --> E[Gemini generates balanced calendar: dates, titles, categories]
+        E --> F[Save to data/client/plans/YYYY-MM.json]
+    end
+
+    subgraph S2["2. Publishing Day: Research Phase"]
+        F --> G[Cron triggers on scheduled publish day]
+        G --> H{Any Breaking News?}
+        H -->|Yes & within quota| I[Swap topic for trending news angle]
+        H -->|No| J[Use planned evergreen topic]
+        I --> K[Deep Research Aggregator]
+        J --> K
+        K --> K1[OpenAlex: Academic papers & abstracts]
+        K --> K2[Google Suggest: Real questions for FAQ]
+        K --> K3[Google News: Recent case studies]
+        K --> K4[Wikipedia: Technical background]
+        K1 & K2 & K3 & K4 --> L[Synthesize into Fact-Checked Research Brief]
+    end
+
+    subgraph S3["3. Writing & Quality Assurance"]
+        L --> M[Gemini: Multi-section technical outline]
+        M --> N[Gemini: Draft 1,200 - 1,500 word comprehensive guide]
+        N --> O[Automated SEO & Quality Audit]
+        O -->|Score < 8/10| P[AI Self-Correction Rewrite: up to 3 passes]
+        O -->|Score >= 8/10| Q[Final Draft Approved]
+        P --> Q
+    end
+
+    subgraph S4["4. Asset Attachment & Delivery"]
+        Q --> R[Unsplash API: Fetch 3 high-res relevant images]
+        R --> S[Save local .html preview and .json export]
+        S --> T{Publish Destination}
+        T -->|Strapi| U[Upload via REST API as Draft or Published]
+        T -->|WordPress| V[Upload via WP REST API]
+        T -->|Files| W[Store in data/drafts/]
+        U --> X[Ping search engines & update Dashboard]
+    end
+```
+
 ## Getting started
 
 You need [Docker](https://docs.docker.com/get-docker/) and two free keys:
